@@ -180,6 +180,7 @@ def api_items():
             "category": d.get("category", ""),
             "assembly_type": d.get("assembly_type", ""),
             "bom_component_count": d.get("bom_component_count", 0),
+            "bom_component_numbers": d.get("bom_component_numbers", []),
             "status": d.get("status", "PENDING"),
             "error": d.get("error"),
             "odoo_template_id": d.get("odoo_template_id"),
@@ -299,7 +300,7 @@ def api_fetch_arena():
 
 
 # In-memory transfer progress
-transfer_progress = {"running": False, "total": 0, "done": 0, "current": "", "results": []}
+transfer_progress = {"running": False, "total": 0, "done": 0, "current": "", "results": [], "phase": ""}
 
 
 @app.route("/api/transfer", methods=["POST"])
@@ -318,6 +319,7 @@ def api_transfer():
         transfer_progress["done"] = 0
         transfer_progress["current"] = ""
         transfer_progress["results"] = []
+        transfer_progress["phase"] = "products"
 
         try:
             config = load_config()
@@ -369,6 +371,9 @@ def api_transfer():
                         # Add to lookup map so BOM phase can find this product
                         code_map[number] = tmpl_id
 
+                        # Extract component numbers from bom_components for "Used In" lookup
+                        bom_comp_numbers = [c.get("number", "") for c in item.get("bom_components", []) if c.get("number")]
+
                         state["items"][guid] = {
                             "number": number,
                             "name": name,
@@ -376,6 +381,7 @@ def api_transfer():
                             "category": item.get("category", ""),
                             "assembly_type": item.get("assembly_type", ""),
                             "bom_component_count": item.get("bom_count", 0),
+                            "bom_component_numbers": bom_comp_numbers,
                             "hash": "",
                             "status": "SYNCED",
                             "error": None,
@@ -395,10 +401,7 @@ def api_transfer():
                 transfer_progress["done"] += 1
 
             # Phase 2: Reconcile ALL assembly BOMs
-            # Fetch all Arena assemblies and their BOMs, then for each assembly
-            # that exists in Odoo without a BOM, create it using whatever
-            # components are available. This catches cases where a component
-            # was just transferred and needs to be added to an existing assembly's BOM.
+            transfer_progress["phase"] = "boms"
             transfer_progress["current"] = "Fetching Arena assemblies for BOM reconciliation..."
             try:
                 arena = build_arena(config)

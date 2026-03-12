@@ -268,6 +268,13 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     item_detail["odoo_bom_id"] = bom_id
 
                 # ── Update state ─────────────────────────────────────
+                # Extract component part numbers for "Used In" reverse lookup
+                bom_comp_numbers = []
+                for bl in bom_lines:
+                    cn = (bl.get("item") or {}).get("number", "")
+                    if cn:
+                        bom_comp_numbers.append(cn)
+
                 state["items"][guid] = {
                     "number": number,
                     "name": name,
@@ -275,6 +282,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "category": category,
                     "assembly_type": assembly_type,
                     "bom_component_count": len(bom_lines),
+                    "bom_component_numbers": bom_comp_numbers,
                     "hash": item_hash,
                     "status": "SYNCED",
                     "error": None,
@@ -297,6 +305,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "category": category,
                     "assembly_type": assembly_type,
                     "bom_component_count": len(bom_lines),
+                    "bom_component_numbers": [(bl.get("item") or {}).get("number", "") for bl in bom_lines if (bl.get("item") or {}).get("number")],
                     "hash": "",
                     "status": "ERROR",
                     "error": str(e),

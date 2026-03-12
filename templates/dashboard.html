@@ -264,6 +264,31 @@
     .pulse { animation: pulse-a 2s ease-in-out infinite; }
     @keyframes pulse-a { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
+    /* ── BOM expand / Used-In ────────────────────── */
+    .bom-toggle {
+      cursor: pointer; user-select: none;
+      display: inline-flex; align-items: center; gap: 4px;
+      color: var(--accent); font-size: 11px; font-weight: 600;
+    }
+    .bom-toggle:hover { color: var(--accent-hover); }
+    .bom-toggle .arrow { display: inline-block; transition: transform 0.15s; font-size: 10px; }
+    .bom-toggle .arrow.open { transform: rotate(90deg); }
+    .bom-sub-row td { padding: 0 !important; border-bottom: 1px solid var(--border); }
+    .bom-sub-table { width: 100%; border-collapse: collapse; background: var(--surface2); }
+    .bom-sub-table td {
+      padding: 5px 14px !important; font-size: 12px; color: var(--text-dim);
+      border-bottom: 1px solid rgba(42,48,64,0.5);
+    }
+    .bom-sub-table tr:last-child td { border-bottom: none; }
+    .bom-sub-table .comp-indent { padding-left: 48px !important; }
+    .used-in-tags { display: flex; flex-wrap: wrap; gap: 3px; }
+    .used-in-tag {
+      display: inline-block; padding: 1px 6px;
+      border-radius: 4px; font-size: 10px; font-weight: 500;
+      background: var(--accent-dim); color: var(--accent);
+      white-space: nowrap;
+    }
+
     /* ── Setup banner ─────────────────────────────── */
     .setup-banner {
       background: linear-gradient(135deg, rgba(91,124,250,0.15), rgba(167,139,250,0.1));
@@ -373,8 +398,6 @@
       <div class="page-header">
         <h2>Dashboard</h2>
         <div class="header-actions">
-          <span id="sched-badge" style="font-size:11px;color:var(--text-muted)"></span>
-          <button class="btn sm" id="btn-sched" onclick="toggleScheduler()">Start Auto-Sync</button>
           <button class="btn primary" id="btn-sync" onclick="triggerSync()">Sync Now</button>
         </div>
       </div>
@@ -398,6 +421,20 @@
         <div class="stat"><div class="label">Components</div><div class="val p" id="s-components">—</div></div>
         <div class="stat"><div class="label">BOMs Created</div><div class="val" id="s-boms">—</div></div>
         <div class="stat"><div class="label">Errors</div><div class="val r" id="s-errors">—</div></div>
+      </div>
+
+      <!-- Auto-Sync control -->
+      <div class="card">
+        <div class="card-head">
+          <span>Auto-Sync Schedule</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="sched-badge" style="font-size:11px;color:var(--text-muted)"></span>
+            <button class="btn sm" id="btn-sched" onclick="toggleScheduler()">Start Auto-Sync</button>
+          </div>
+        </div>
+        <div class="card-body" style="font-size:13px;color:var(--text-dim);">
+          <span id="sched-desc">Auto-sync is off. When enabled, the tool will automatically sync all "In Production" items from Arena to Odoo at the configured interval. Configure the interval in <a href="#" onclick="showPage('settings');return false" style="color:var(--accent)">Settings</a>.</span>
+        </div>
       </div>
 
       <!-- Last run summary -->
@@ -440,7 +477,7 @@
                   <th>Rev</th>
                   <th>Type</th>
                   <th>Category</th>
-                  <th>BOM</th>
+                  <th>Used In / BOM</th>
                   <th>Odoo Product</th>
                   <th>Odoo BOM</th>
                   <th>Synced</th>
@@ -496,6 +533,8 @@
             <button class="btn sm" onclick="filterItems('all')" id="ft-all">All <span id="ft-all-n"></span></button>
             <button class="btn sm" onclick="filterItems('new')" id="ft-new">New Only <span id="ft-new-n"></span></button>
             <button class="btn sm" onclick="filterItems('exists')" id="ft-exists">Already in Odoo <span id="ft-exists-n"></span></button>
+            <button class="btn sm" onclick="filterItems('assemblies')" id="ft-assemblies">Assemblies <span id="ft-assemblies-n"></span></button>
+            <button class="btn sm" onclick="filterItems('components')" id="ft-components">Components <span id="ft-components-n"></span></button>
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
             <button class="btn sm" onclick="selectAllVisible()">Select All Visible</button>
@@ -642,21 +681,40 @@
       <div class="card">
         <div class="card-head">Sync Settings</div>
         <div class="card-body">
+          <div class="form-group">
+            <label>Auto-Sync Interval (minutes)</label>
+            <input id="cfg-sync-interval" type="number" min="1" value="15" style="max-width:200px">
+          </div>
+        </div>
+      </div>
+
+      <!-- Default Mappings -->
+      <div class="card">
+        <div class="card-head">
+          <span>Default Product Mappings</span>
+          <button class="btn sm" onclick="loadOdooDropdowns()" id="btn-load-mappings">Load from Odoo</button>
+        </div>
+        <div class="card-body">
+          <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+            When a product is transferred, it needs a category and unit of measure in Odoo.
+            These defaults are used when no specific mapping exists for the Arena category.
+            Click "Load from Odoo" to populate the dropdowns.
+          </p>
           <div class="form-row">
             <div class="form-group">
-              <label>Auto-Sync Interval (minutes)</label>
-              <input id="cfg-sync-interval" type="number" min="1" value="15">
+              <label>Default Product Category</label>
+              <select id="cfg-default-cat">
+                <option value="">-- Click "Load from Odoo" --</option>
+              </select>
+              <div class="form-hint">Fallback category for products without a specific mapping</div>
             </div>
             <div class="form-group">
-              <label>Default Odoo Category ID</label>
-              <input id="cfg-default-cat" type="number" min="1" value="1">
-              <div class="form-hint">Fallback when Arena category has no mapping</div>
+              <label>Default Unit of Measure</label>
+              <select id="cfg-default-uom">
+                <option value="">-- Click "Load from Odoo" --</option>
+              </select>
+              <div class="form-hint">Fallback UoM (usually "Units")</div>
             </div>
-          </div>
-          <div class="form-group">
-            <label>Default Odoo UoM ID</label>
-            <input id="cfg-default-uom" type="number" min="1" value="1">
-            <div class="form-hint">Fallback unit of measure (1 = "Units" in most Odoo installs)</div>
           </div>
         </div>
       </div>
@@ -742,16 +800,19 @@ async function refresh() {
     const schedBtn = document.getElementById('btn-sched');
     const schedBadge = document.getElementById('sched-badge');
     const sbSched = document.getElementById('sb-scheduler');
+    const schedDesc = document.getElementById('sched-desc');
     if (schedulerActive) {
       schedBtn.textContent = 'Stop Auto-Sync';
       schedBtn.className = 'btn sm danger';
-      schedBadge.innerHTML = '<span class="conn-dot ok pulse" style="display:inline-block;width:6px;height:6px;vertical-align:middle;margin-right:4px"></span>Auto-sync active';
+      schedBadge.innerHTML = '<span class="conn-dot ok pulse" style="display:inline-block;width:6px;height:6px;vertical-align:middle;margin-right:4px"></span>Running';
       sbSched.innerHTML = '<span class="dot pulse" style="background:var(--green)"></span> Auto-sync ON';
+      schedDesc.innerHTML = 'Auto-sync is <strong style="color:var(--green)">active</strong>. Items are being synced automatically at the configured interval.';
     } else {
       schedBtn.textContent = 'Start Auto-Sync';
       schedBtn.className = 'btn sm success';
       schedBadge.textContent = '';
       sbSched.textContent = 'Auto-sync OFF';
+      schedDesc.innerHTML = 'Auto-sync is off. When enabled, the tool will automatically sync all "In Production" items from Arena to Odoo at the configured interval. Configure the interval in <a href="#" onclick="showPage(\'settings\');return false" style="color:var(--accent)">Settings</a>.';
     }
 
     // ── Config status dots
@@ -839,11 +900,31 @@ async function refresh() {
     if (items.length === 0) {
       iTbody.innerHTML = '<tr><td colspan="11" class="empty">No items synced yet. Run a sync from the Dashboard.</td></tr>';
     } else {
+      // Build reverse map: component number -> list of parent assembly numbers
+      const itemUsedIn = {};
+      for (const it of items) {
+        if (it.bom_component_numbers && it.bom_component_numbers.length > 0) {
+          for (const cn of it.bom_component_numbers) {
+            if (!itemUsedIn[cn]) itemUsedIn[cn] = [];
+            itemUsedIn[cn].push(it.number);
+          }
+        }
+      }
       iTbody.innerHTML = items.map(i => {
         const statusBadge = i.status === 'SYNCED' ? '<span class="badge synced">synced</span>' :
                             i.status === 'ERROR' ? '<span class="badge error" title="'+esc(i.error)+'">error</span>' :
                             '<span class="badge pending">pending</span>';
-        const typeBadge = i.assembly_type ? '<span class="badge assembly">asm</span>' : '<span class="badge component">part</span>';
+        const isAsm = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
+        const typeBadge = isAsm ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>';
+        const parents = itemUsedIn[i.number] || [];
+        let usedInCell = '';
+        if (isAsm && i.bom_component_count) {
+          usedInCell = '<span style="color:var(--accent);font-size:11px">' + i.bom_component_count + ' components</span>';
+        } else if (parents.length > 0) {
+          usedInCell = '<div class="used-in-tags">' + parents.map(p => '<span class="used-in-tag">'+esc(p)+'</span>').join('') + '</div>';
+        } else {
+          usedInCell = '<span style="color:var(--text-muted)">--</span>';
+        }
         return `<tr>
           <td>${statusBadge}</td>
           <td class="mono"><strong>${esc(i.number)}</strong></td>
@@ -851,7 +932,7 @@ async function refresh() {
           <td class="mono">${esc(i.revision)}</td>
           <td>${typeBadge}</td>
           <td style="color:var(--text-dim)">${esc(i.category)}</td>
-          <td class="mono">${i.bom_component_count || '—'}</td>
+          <td>${usedInCell}</td>
           <td class="mono">${i.odoo_template_id ? '<span style="color:var(--green)">'+i.odoo_template_id+'</span>' : '—'}</td>
           <td class="mono">${i.odoo_bom_id ? '<span style="color:var(--green)">'+i.odoo_bom_id+'</span>' : '—'}</td>
           <td style="font-size:11px;color:var(--text-muted)">${i.synced_at ? new Date(i.synced_at).toLocaleString() : ''}</td>
@@ -971,14 +1052,17 @@ async function fetchArenaItems() {
     // Update missing components page
     const totalMissing = items.reduce((s,i) => s + i.missing_components.length, 0);
     if (totalMissing > 0) {
-      const allMissing = items.flatMap(i => i.missing_components.map(m => ({...m, parent_number:i.number, parent_name:i.name})));
+      const allMissing = items.flatMap(i => i.missing_components.map(m => ({
+        component_number: m.number, component_name: m.name, quantity: m.qty,
+        parent_number: i.number, parent_name: i.name
+      })));
       lastMissingComponents = allMissing;
       const mTbody = document.getElementById('missing-tbody');
       mTbody.innerHTML = allMissing.map(m => `
         <tr>
-          <td><span class="badge missing">NOT IN PRODUCTION</span> <strong>${esc(m.number)}</strong> — ${esc(m.name)}</td>
+          <td><span class="badge missing">NOT IN PRODUCTION</span> <strong>${esc(m.component_number)}</strong> — ${esc(m.component_name)}</td>
           <td>${esc(m.parent_number)} — ${esc(m.parent_name)}</td>
-          <td class="mono">${m.qty}</td>
+          <td class="mono">${m.quantity}</td>
         </tr>
       `).join('');
     }
@@ -994,35 +1078,63 @@ async function fetchArenaItems() {
   }
 }
 
+function buildUsedInMap() {
+  // Reverse lookup: component part number -> list of parent assembly numbers
+  const map = {};
+  for (const item of fetchedItems) {
+    if (!item.bom_components || item.bom_components.length === 0) continue;
+    for (const comp of item.bom_components) {
+      if (!comp.number) continue;
+      if (!map[comp.number]) map[comp.number] = [];
+      map[comp.number].push({ number: item.number, name: item.name });
+    }
+  }
+  return map;
+}
+
 function renderFetchedItems() {
   const container = document.getElementById('fetch-container');
-  const filtered = currentFilter === 'all' ? fetchedItems :
-    fetchedItems.filter(i => i.odoo_status === currentFilter);
+  let filtered;
+  if (currentFilter === 'all') filtered = fetchedItems;
+  else if (currentFilter === 'assemblies') filtered = fetchedItems.filter(i => i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY');
+  else if (currentFilter === 'components') filtered = fetchedItems.filter(i => !i.assembly_type || i.assembly_type === 'NOT_AN_ASSEMBLY');
+  else filtered = fetchedItems.filter(i => i.odoo_status === currentFilter);
 
   const newCount = fetchedItems.filter(i => i.odoo_status === 'new').length;
   const existsCount = fetchedItems.filter(i => i.odoo_status === 'exists').length;
+
+  const asmCount = fetchedItems.filter(i => i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY').length;
+  const compCount = fetchedItems.length - asmCount;
 
   // Update filter button labels
   document.getElementById('ft-all-n').textContent = '(' + fetchedItems.length + ')';
   document.getElementById('ft-new-n').textContent = '(' + newCount + ')';
   document.getElementById('ft-exists-n').textContent = '(' + existsCount + ')';
+  document.getElementById('ft-assemblies-n').textContent = '(' + asmCount + ')';
+  document.getElementById('ft-components-n').textContent = '(' + compCount + ')';
 
   // Active tab style
-  ['all','new','exists'].forEach(f => {
+  ['all','new','exists','assemblies','components'].forEach(f => {
     const el = document.getElementById('ft-' + f);
     el.className = f === currentFilter ? 'btn sm primary' : 'btn sm';
   });
 
   // Stats row
+  const assemblies = fetchedItems.filter(i => i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY');
+  const components = fetchedItems.length - assemblies.length;
   const totalBom = fetchedItems.filter(i => i.bom_count > 0).length;
   const totalMissing = fetchedItems.reduce((s,i) => s + i.missing_components.length, 0);
+
+  // Build reverse lookup: which assemblies use each component
+  const usedInMap = buildUsedInMap();
 
   container.innerHTML = `
     <div class="stats" style="margin-bottom:16px">
       <div class="stat"><div class="label">In Production</div><div class="val a">${fetchedItems.length}</div></div>
       <div class="stat"><div class="label">New (not in Odoo)</div><div class="val g">${newCount}</div></div>
       <div class="stat"><div class="label">Already in Odoo</div><div class="val">${existsCount}</div></div>
-      <div class="stat"><div class="label">With BOMs</div><div class="val">${totalBom}</div></div>
+      <div class="stat"><div class="label">Assemblies</div><div class="val p">${assemblies.length}</div></div>
+      <div class="stat"><div class="label">Components</div><div class="val">${components}</div></div>
       <div class="stat"><div class="label">Missing Components</div><div class="val ${totalMissing?'r':''}">${totalMissing}</div></div>
     </div>
     <div class="card">
@@ -1037,8 +1149,7 @@ function renderFetchedItems() {
             <th>Rev</th>
             <th>Category</th>
             <th>Type</th>
-            <th>BOM</th>
-            <th>Issues</th>
+            <th>Used In / BOM</th>
           </tr></thead>
           <tbody>
             ${filtered.map((i, idx) => {
@@ -1048,19 +1159,66 @@ function renderFetchedItems() {
                 : i.odoo_status === 'exists'
                 ? '<span class="badge synced">exists</span>'
                 : '<span class="badge">' + esc(i.odoo_status) + '</span>';
-              return `<tr>
+
+              const isAssembly = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
+              const parents = usedInMap[i.number] || [];
+
+              // "Used In / BOM" column content
+              let bomCell = '';
+              if (isAssembly && i.bom_count > 0) {
+                // Assembly: show expandable BOM toggle
+                bomCell = `<span class="bom-toggle" onclick="toggleBom('bom-${origIdx}', this)">` +
+                  `<span class="arrow">&#9654;</span> ${i.bom_count} components` +
+                  (i.missing_components.length > 0 ? ` <span class="badge missing" style="margin-left:4px">${i.missing_components.length} missing</span>` : '') +
+                  `</span>`;
+              } else if (parents.length > 0) {
+                // Component used in assemblies: show parent tags
+                bomCell = '<div class="used-in-tags">' +
+                  parents.map(p => `<span class="used-in-tag" title="${esc(p.name)}">${esc(p.number)}</span>`).join('') +
+                  '</div>';
+              } else {
+                bomCell = '<span style="color:var(--text-muted)">--</span>';
+              }
+
+              // Main row
+              let rows = `<tr>
                 <td><input type="checkbox" class="item-chk" data-idx="${origIdx}" ${i._selected ? 'checked' : ''} onchange="onItemCheck(${origIdx}, this.checked)"></td>
                 <td>${statusBadge}</td>
                 <td class="mono"><strong>${esc(i.number)}</strong></td>
                 <td>${esc(i.name)}</td>
                 <td class="mono">${esc(i.revision)}</td>
                 <td style="color:var(--text-dim)">${esc(i.category)}</td>
-                <td>${i.assembly_type ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>'}</td>
-                <td>${i.bom_count > 0 ? '<span class="badge synced">' + i.bom_count + ' items</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
-                <td>${i.missing_components.length > 0
-                  ? '<span class="badge missing">'+i.missing_components.length+' missing</span>'
-                  : '<span style="color:var(--green);font-size:11px">OK</span>'}</td>
+                <td>${isAssembly ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>'}</td>
+                <td>${bomCell}</td>
               </tr>`;
+
+              // Expandable BOM sub-rows (hidden by default)
+              if (isAssembly && i.bom_components && i.bom_components.length > 0) {
+                rows += `<tr class="bom-sub-row" id="bom-${origIdx}" style="display:none">
+                  <td colspan="8">
+                    <table class="bom-sub-table">
+                      <tr>
+                        <td class="comp-indent" style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Component</td>
+                        <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Name</td>
+                        <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;width:60px">Qty</td>
+                        <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;width:90px">Status</td>
+                      </tr>
+                      ${i.bom_components.map(c => {
+                        const cStatus = c.in_production
+                          ? '<span style="color:var(--green);font-size:10px">In Production</span>'
+                          : '<span class="badge missing">Not in prod</span>';
+                        return `<tr>
+                          <td class="comp-indent mono">${esc(c.number)}</td>
+                          <td>${esc(c.name)}</td>
+                          <td class="mono">${c.qty}</td>
+                          <td>${cStatus}</td>
+                        </tr>`;
+                      }).join('')}
+                    </table>
+                  </td>
+                </tr>`;
+              }
+              return rows;
             }).join('')}
           </tbody>
         </table>
@@ -1070,6 +1228,19 @@ function renderFetchedItems() {
   `;
 
   updateSelectionCount();
+}
+
+function toggleBom(rowId, toggleEl) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const arrow = toggleEl.querySelector('.arrow');
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    arrow.classList.add('open');
+  } else {
+    row.style.display = 'none';
+    arrow.classList.remove('open');
+  }
 }
 
 function filterItems(f) {
@@ -1082,17 +1253,20 @@ function onItemCheck(idx, checked) {
   updateSelectionCount();
 }
 
+function getVisibleItems() {
+  if (currentFilter === 'all') return fetchedItems;
+  if (currentFilter === 'assemblies') return fetchedItems.filter(i => i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY');
+  if (currentFilter === 'components') return fetchedItems.filter(i => !i.assembly_type || i.assembly_type === 'NOT_AN_ASSEMBLY');
+  return fetchedItems.filter(i => i.odoo_status === currentFilter);
+}
+
 function toggleAll(checked) {
-  const visible = currentFilter === 'all' ? fetchedItems :
-    fetchedItems.filter(i => i.odoo_status === currentFilter);
-  visible.forEach(i => i._selected = checked);
+  getVisibleItems().forEach(i => i._selected = checked);
   renderFetchedItems();
 }
 
 function selectAllVisible() {
-  const visible = currentFilter === 'all' ? fetchedItems :
-    fetchedItems.filter(i => i.odoo_status === currentFilter);
-  visible.forEach(i => i._selected = true);
+  getVisibleItems().forEach(i => i._selected = true);
   renderFetchedItems();
 }
 
@@ -1107,8 +1281,7 @@ function deselectAll() {
 }
 
 function updateSelectionCount() {
-  const visible = currentFilter === 'all' ? fetchedItems :
-    fetchedItems.filter(i => i.odoo_status === currentFilter);
+  const visible = getVisibleItems();
   const count = fetchedItems.filter(i => i._selected).length;
   const allVisibleSelected = visible.length > 0 && visible.every(i => i._selected);
   document.getElementById('sel-count').textContent = count + ' selected';
@@ -1144,9 +1317,14 @@ async function transferSelected() {
         const p = await api('/api/transfer/progress');
         const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
         document.getElementById('tp-bar').style.width = pct + '%';
-        document.getElementById('tp-count').textContent = p.done + ' / ' + p.total;
         document.getElementById('tp-current').textContent = p.current || '';
-        document.getElementById('tp-label').textContent = 'Transferring... ' + pct + '%';
+        if (p.phase === 'boms') {
+          document.getElementById('tp-count').textContent = p.done + ' / ' + p.total + ' products done';
+          document.getElementById('tp-label').textContent = 'Creating BOMs...';
+        } else {
+          document.getElementById('tp-count').textContent = p.done + ' / ' + p.total;
+          document.getElementById('tp-label').textContent = 'Transferring products... ' + pct + '%';
+        }
 
         if (!p.running && p.done > 0) {
           clearInterval(transferPolling);
@@ -1222,9 +1400,56 @@ async function loadSettings() {
   document.getElementById('odoo-pw-hint').textContent = cfg.odoo?.password_set ? 'Password is set. Leave blank to keep.' : 'No password set.';
 
   document.getElementById('cfg-sync-interval').value = cfg.sync?.interval_minutes || 15;
-  document.getElementById('cfg-default-cat').value = cfg.mapping?.default_category_id || 1;
-  document.getElementById('cfg-default-uom').value = cfg.mapping?.default_uom_id || 1;
+
+  // Store current values to set after dropdowns load
+  window._pendingCatId = cfg.mapping?.default_category_id || 17;
+  window._pendingUomId = cfg.mapping?.default_uom_id || 1;
+
+  // Set select values (works if options already loaded)
+  document.getElementById('cfg-default-cat').value = window._pendingCatId;
+  document.getElementById('cfg-default-uom').value = window._pendingUomId;
+
+  // Try loading dropdowns from Odoo if configured
+  loadOdooDropdowns();
 }
+
+async function loadOdooDropdowns() {
+  const catSelect = document.getElementById('cfg-default-cat');
+  const uomSelect = document.getElementById('cfg-default-uom');
+  const btn = document.getElementById('btn-load-mappings');
+
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+
+    const [categories, uoms] = await Promise.all([
+      api('/api/odoo/categories'),
+      api('/api/odoo/uoms'),
+    ]);
+
+    if (categories && !categories.error) {
+      const currentCat = window._pendingCatId || parseInt(catSelect.value) || 17;
+      catSelect.innerHTML = categories
+        .sort((a, b) => (a.complete_name || a.name).localeCompare(b.complete_name || b.name))
+        .map(c => `<option value="${c.id}" ${c.id === currentCat ? 'selected' : ''}>${esc(c.complete_name || c.name)} (id=${c.id})</option>`)
+        .join('');
+    }
+
+    if (uoms && !uoms.error) {
+      const currentUom = window._pendingUomId || parseInt(uomSelect.value) || 1;
+      uomSelect.innerHTML = uoms
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(u => `<option value="${u.id}" ${u.id === currentUom ? 'selected' : ''}>${esc(u.name)} (id=${u.id})</option>`)
+        .join('');
+    }
+
+    btn.textContent = 'Reload from Odoo';
+  } catch(e) {
+    // Odoo not configured yet — that's fine, fallback to manual input
+    btn.textContent = 'Load from Odoo';
+  } finally {
+    btn.disabled = false;
+  }
 
 async function testCreateProduct(keep) {
   const msg = document.getElementById('test-product-msg');
