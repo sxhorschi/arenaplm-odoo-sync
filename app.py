@@ -170,6 +170,15 @@ def api_status():
 @app.route("/api/items")
 def api_items():
     state = load_state()
+
+    # Build reverse map server-side: component number -> list of parent assembly numbers
+    comp_to_parents: dict[str, list[str]] = {}
+    for guid, d in state.get("items", {}).items():
+        for cn in d.get("bom_component_numbers", []):
+            if cn not in comp_to_parents:
+                comp_to_parents[cn] = []
+            comp_to_parents[cn].append(d.get("number", ""))
+
     items = []
     for guid, d in state.get("items", {}).items():
         items.append({
@@ -181,6 +190,7 @@ def api_items():
             "assembly_type": d.get("assembly_type", ""),
             "bom_component_count": d.get("bom_component_count", 0),
             "bom_component_numbers": d.get("bom_component_numbers", []),
+            "used_in": comp_to_parents.get(d.get("number", ""), []),
             "status": d.get("status", "PENDING"),
             "error": d.get("error"),
             "odoo_template_id": d.get("odoo_template_id"),
@@ -243,7 +253,22 @@ def api_fetch_arena():
             except Exception as e:
                 log_activity("WARN", f"Could not batch-fetch Odoo products: {e}")
 
+        # Build reverse lookup: component guid -> list of parent assembly info
+        # So we can tell each component which assemblies it belongs to
+        assembly_lookup = {}  # {guid: {number, name, assemblyType}}
+        for item in items:
+            at = item.get("assemblyType", "")
+            if at and at != "NOT_AN_ASSEMBLY":
+                assembly_lookup[item["guid"]] = {
+                    "number": item.get("number", ""),
+                    "name": item.get("name", ""),
+                    "assembly_type": at,
+                }
+
         result = []
+        # comp_guid -> [parent assembly numbers] built during BOM fetching
+        comp_to_assemblies: dict[str, list[dict]] = {}
+
         for item in items:
             guid = item.get("guid", "")
             number = item.get("number", "")
@@ -268,6 +293,16 @@ def api_fetch_arena():
                         "name": (l.get("item") or {}).get("name", "?"),
                         "qty": l.get("quantity", 0),
                     })
+                # Track which assemblies use each component
+                if cg:
+                    if cg not in comp_to_assemblies:
+                        comp_to_assemblies[cg] = []
+                    asm_in_odoo = bool(odoo_products.get(number) or odoo_products.get(f"ARENA-{number}"))
+                    comp_to_assemblies[cg].append({
+                        "number": number,
+                        "name": item.get("name", ""),
+                        "in_odoo": asm_in_odoo,
+                    })
 
             result.append({
                 "guid": guid,
@@ -290,6 +325,12 @@ def api_fetch_arena():
                 "odoo_status": odoo_status,
                 "odoo_template_id": odoo_template_id,
             })
+
+        # Enrich each item with "used_in_assemblies" (which assemblies reference this component)
+        guid_to_number = {item.get("guid"): idx for idx, item in enumerate(items)}
+        for item_data, item_raw in zip(result, items):
+            raw_guid = item_raw.get("guid", "")
+            item_data["used_in_assemblies"] = comp_to_assemblies.get(raw_guid, [])
 
         new_count = sum(1 for r in result if r["odoo_status"] == "new")
         exists_count = sum(1 for r in result if r["odoo_status"] == "exists")
@@ -400,7 +441,13 @@ def api_transfer():
                 transfer_progress["results"].append(entry)
                 transfer_progress["done"] += 1
 
-            # Phase 2: Reconcile ALL assembly BOMs
+            # Phase 2: Reconcile ALL assembly BOMs (create new + update existing)
+            #
+            # For each assembly in Arena that exists in Odoo:
+            #   - No BOM yet → create with all available components
+            #   - BOM exists → check for missing lines and add them
+            # This ensures that transferring new components updates all
+            # related BOMs, not just assemblies without BOMs.
             transfer_progress["phase"] = "boms"
             transfer_progress["current"] = "Fetching Arena assemblies for BOM reconciliation..."
             try:
@@ -414,22 +461,20 @@ def api_transfer():
                 code_map = odoo.find_all_products_with_codes()
 
                 boms_created = 0
+                boms_updated = 0
                 for asm in assemblies:
                     asm_number = asm.get("number", "")
                     asm_tmpl = code_map.get(asm_number)
                     if not asm_tmpl:
                         continue  # Assembly not in Odoo yet
 
-                    # Skip if BOM already exists
-                    if odoo.find_bom_by_product(asm_tmpl):
-                        continue
-
                     # Fetch BOM lines from Arena
                     bom_lines = arena.get_bom_for_item(asm["guid"])
                     if not bom_lines:
                         continue
 
-                    odoo_bom_lines = []
+                    # Build desired BOM lines from Arena data
+                    desired_lines = []  # [(comp_variant_id, line_vals)]
                     skipped_comps = []
                     for line in bom_lines:
                         comp_item = line.get("item") or {}
@@ -442,41 +487,56 @@ def api_transfer():
                         if not comp_variant:
                             skipped_comps.append(f"{comp_number} (no variant)")
                             continue
-                        odoo_bom_lines.append(map_bom_line(
+                        desired_lines.append((comp_variant, map_bom_line(
                             comp_variant, line.get("quantity", 1), "", mapping_cfg
-                        ))
+                        )))
 
                     if skipped_comps:
                         logger.warning("BOM %s: %d components not in Odoo: %s",
                                        asm_number, len(skipped_comps), ", ".join(skipped_comps))
 
-                    if odoo_bom_lines:
-                        transfer_progress["current"] = f"BOM: {asm_number} ({len(odoo_bom_lines)} lines)"
-                        try:
-                            bom_id = odoo.create_bom(asm_tmpl, odoo_bom_lines)
+                    if not desired_lines:
+                        continue
+
+                    existing_bom_id = odoo.find_bom_by_product(asm_tmpl)
+
+                    try:
+                        if not existing_bom_id:
+                            # No BOM yet — create
+                            transfer_progress["current"] = f"BOM: creating {asm_number} ({len(desired_lines)} lines)"
+                            bom_id = odoo.create_bom(asm_tmpl, [lv for _, lv in desired_lines])
                             boms_created += 1
 
-                            # Update result entry if this assembly was in the transfer
                             for r in transfer_progress["results"]:
                                 if r["number"] == asm_number:
                                     r["odoo_bom_id"] = bom_id
                                     break
-
-                            # Update state
                             for guid, sdata in state.get("items", {}).items():
                                 if sdata.get("number") == asm_number:
                                     sdata["odoo_bom_id"] = bom_id
                                     save_state(state)
                                     break
+                        else:
+                            # BOM exists — check for missing lines and add them
+                            existing_lines = odoo.get_bom_lines(existing_bom_id)
+                            existing_product_ids = {
+                                (ln["product_id"][0] if isinstance(ln["product_id"], (list, tuple)) else ln["product_id"])
+                                for ln in existing_lines if ln.get("product_id")
+                            }
+                            new_lines = [lv for vid, lv in desired_lines if vid not in existing_product_ids]
+                            if new_lines:
+                                transfer_progress["current"] = f"BOM: updating {asm_number} (+{len(new_lines)} lines)"
+                                odoo.update_bom_add_lines(existing_bom_id, new_lines)
+                                boms_updated += 1
 
-                        except Exception as e:
-                            logger.error("BOM creation failed for %s: %s", asm_number, e, exc_info=True)
-                            for r in transfer_progress["results"]:
-                                if r["number"] == asm_number:
-                                    r["error"] = (r.get("error") or "") + f" BOM error: {e}"
-                                    break
+                    except Exception as e:
+                        logger.error("BOM failed for %s: %s", asm_number, e, exc_info=True)
+                        for r in transfer_progress["results"]:
+                            if r["number"] == asm_number:
+                                r["error"] = (r.get("error") or "") + f" BOM error: {e}"
+                                break
 
-                log_activity("INFO", f"BOM reconciliation: created {boms_created} new BOMs")
+                log_activity("INFO", f"BOM reconciliation: {boms_created} created, {boms_updated} updated")
 
             except Exception as e:
                 logger.error("BOM reconciliation failed: %s", e, exc_info=True)

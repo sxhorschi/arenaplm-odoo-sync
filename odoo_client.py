@@ -122,6 +122,13 @@ class OdooClient:
         ids = self.execute("mrp.bom", "search", [[["product_tmpl_id", "=", template_id]]])
         return ids[0] if ids else None
 
+    def get_bom_lines(self, bom_id: int) -> list[dict]:
+        """Get existing BOM lines with their product_id for comparison."""
+        line_ids = self.execute("mrp.bom.line", "search", [[["bom_id", "=", bom_id]]])
+        if not line_ids:
+            return []
+        return self.execute("mrp.bom.line", "read", [line_ids, ["product_id", "product_qty"]])
+
     def create_bom(self, template_id: int, bom_lines: list[dict]) -> int:
         vals = {
             "product_tmpl_id": template_id,
@@ -131,6 +138,17 @@ class OdooClient:
         bom_id = self.execute("mrp.bom", "create", [vals])
         logger.info("Odoo: created mrp.bom id=%d for template=%d (%d lines)", bom_id, template_id, len(bom_lines))
         return bom_id
+
+    def update_bom_add_lines(self, bom_id: int, new_lines: list[dict]) -> int:
+        """Add new lines to an existing BOM. Returns number of lines added."""
+        if not new_lines:
+            return 0
+        # Use (0, 0, vals) to add new lines via write
+        self.execute("mrp.bom", "write", [[bom_id], {
+            "bom_line_ids": [(0, 0, line) for line in new_lines],
+        }])
+        logger.info("Odoo: added %d lines to mrp.bom id=%d", len(new_lines), bom_id)
+        return len(new_lines)
 
     # ── Reference data ───────────────────────────────────────────────
 

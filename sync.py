@@ -234,10 +234,11 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                 item_detail["odoo_template_id"] = tmpl_id
                 variant_id = odoo.get_product_variant_id(tmpl_id)
 
-                # ── Create BOM if assembly with components ───────────
+                # ── Create or update BOM ────────────────────────────
                 bom_id = None
-                if bom_lines and not odoo.find_bom_by_product(tmpl_id):
-                    odoo_bom_lines = []
+                if bom_lines:
+                    # Resolve all available components
+                    desired_lines = []  # [(variant_id, line_vals)]
                     for bom_line in bom_lines:
                         comp_info = bom_line.get("item", {})
                         comp_number = comp_info.get("number", "")
@@ -253,19 +254,31 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                             logger.warning("BOM: no variant for %s -- skipping line", comp_number)
                             continue
 
-                        odoo_bom_lines.append(
+                        desired_lines.append((comp_variant_id,
                             map_bom_line(comp_variant_id, quantity, comp_info.get("uom", ""), mapping_config)
-                        )
+                        ))
 
-                    if odoo_bom_lines:
-                        bom_id = odoo.create_bom(tmpl_id, odoo_bom_lines)
+                    existing_bom_id = odoo.find_bom_by_product(tmpl_id)
+                    if not existing_bom_id and desired_lines:
+                        bom_id = odoo.create_bom(tmpl_id, [lv for _, lv in desired_lines])
                         item_detail["odoo_bom_id"] = bom_id
                         result["boms_created"] += 1
                         logger.info("Created BOM id=%d for %s (%d/%d lines)",
-                                    bom_id, number, len(odoo_bom_lines), len(bom_lines))
-                elif bom_lines:
-                    bom_id = odoo.find_bom_by_product(tmpl_id)
-                    item_detail["odoo_bom_id"] = bom_id
+                                    bom_id, number, len(desired_lines), len(bom_lines))
+                    elif existing_bom_id and desired_lines:
+                        bom_id = existing_bom_id
+                        item_detail["odoo_bom_id"] = bom_id
+                        # Check for missing lines and add them
+                        existing_lines = odoo.get_bom_lines(existing_bom_id)
+                        existing_product_ids = {
+                            (ln["product_id"][0] if isinstance(ln["product_id"], (list, tuple)) else ln["product_id"])
+                            for ln in existing_lines if ln.get("product_id")
+                        }
+                        new_lines = [lv for vid, lv in desired_lines if vid not in existing_product_ids]
+                        if new_lines:
+                            odoo.update_bom_add_lines(existing_bom_id, new_lines)
+                            logger.info("Updated BOM id=%d for %s: added %d lines",
+                                        existing_bom_id, number, len(new_lines))
 
                 # ── Update state ─────────────────────────────────────
                 # Extract component part numbers for "Used In" reverse lookup

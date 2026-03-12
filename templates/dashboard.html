@@ -900,23 +900,13 @@ async function refresh() {
     if (items.length === 0) {
       iTbody.innerHTML = '<tr><td colspan="11" class="empty">No items synced yet. Run a sync from the Dashboard.</td></tr>';
     } else {
-      // Build reverse map: component number -> list of parent assembly numbers
-      const itemUsedIn = {};
-      for (const it of items) {
-        if (it.bom_component_numbers && it.bom_component_numbers.length > 0) {
-          for (const cn of it.bom_component_numbers) {
-            if (!itemUsedIn[cn]) itemUsedIn[cn] = [];
-            itemUsedIn[cn].push(it.number);
-          }
-        }
-      }
       iTbody.innerHTML = items.map(i => {
         const statusBadge = i.status === 'SYNCED' ? '<span class="badge synced">synced</span>' :
                             i.status === 'ERROR' ? '<span class="badge error" title="'+esc(i.error)+'">error</span>' :
                             '<span class="badge pending">pending</span>';
         const isAsm = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
         const typeBadge = isAsm ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>';
-        const parents = itemUsedIn[i.number] || [];
+        const parents = i.used_in || [];
         let usedInCell = '';
         if (isAsm && i.bom_component_count) {
           usedInCell = '<span style="color:var(--accent);font-size:11px">' + i.bom_component_count + ' components</span>';
@@ -1078,20 +1068,6 @@ async function fetchArenaItems() {
   }
 }
 
-function buildUsedInMap() {
-  // Reverse lookup: component part number -> list of parent assembly numbers
-  const map = {};
-  for (const item of fetchedItems) {
-    if (!item.bom_components || item.bom_components.length === 0) continue;
-    for (const comp of item.bom_components) {
-      if (!comp.number) continue;
-      if (!map[comp.number]) map[comp.number] = [];
-      map[comp.number].push({ number: item.number, name: item.name });
-    }
-  }
-  return map;
-}
-
 function renderFetchedItems() {
   const container = document.getElementById('fetch-container');
   let filtered;
@@ -1124,9 +1100,6 @@ function renderFetchedItems() {
   const components = fetchedItems.length - assemblies.length;
   const totalBom = fetchedItems.filter(i => i.bom_count > 0).length;
   const totalMissing = fetchedItems.reduce((s,i) => s + i.missing_components.length, 0);
-
-  // Build reverse lookup: which assemblies use each component
-  const usedInMap = buildUsedInMap();
 
   container.innerHTML = `
     <div class="stats" style="margin-bottom:16px">
@@ -1161,7 +1134,7 @@ function renderFetchedItems() {
                 : '<span class="badge">' + esc(i.odoo_status) + '</span>';
 
               const isAssembly = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
-              const parents = usedInMap[i.number] || [];
+              const parents = i.used_in_assemblies || [];
 
               // "Used In / BOM" column content
               let bomCell = '';
@@ -1172,9 +1145,15 @@ function renderFetchedItems() {
                   (i.missing_components.length > 0 ? ` <span class="badge missing" style="margin-left:4px">${i.missing_components.length} missing</span>` : '') +
                   `</span>`;
               } else if (parents.length > 0) {
-                // Component used in assemblies: show parent tags
+                // Component used in assemblies: show parent tags with Odoo status
                 bomCell = '<div class="used-in-tags">' +
-                  parents.map(p => `<span class="used-in-tag" title="${esc(p.name)}">${esc(p.number)}</span>`).join('') +
+                  parents.map(p => {
+                    if (p.in_odoo) {
+                      return `<span class="used-in-tag" title="${esc(p.name)} (in Odoo)">${esc(p.number)}</span>`;
+                    } else {
+                      return `<span class="used-in-tag" style="background:var(--orange-dim);color:var(--orange)" title="${esc(p.name)} (NOT in Odoo!)">${esc(p.number)} !</span>`;
+                    }
+                  }).join('') +
                   '</div>';
               } else {
                 bomCell = '<span style="color:var(--text-muted)">--</span>';
@@ -1294,7 +1273,25 @@ async function transferSelected() {
   const selected = fetchedItems.filter(i => i._selected);
   if (selected.length === 0) return;
 
-  if (!confirm(`Transfer ${selected.length} item(s) to Odoo?`)) return;
+  // Check for components whose parent assemblies are NOT in Odoo
+  const warnings = [];
+  for (const item of selected) {
+    const parents = item.used_in_assemblies || [];
+    const missingParents = parents.filter(p => !p.in_odoo);
+    if (missingParents.length > 0) {
+      warnings.push(`${item.number} is used in: ${missingParents.map(p => p.number).join(', ')} (not in Odoo)`);
+    }
+  }
+
+  let msg = `Transfer ${selected.length} item(s) to Odoo?`;
+  if (warnings.length > 0) {
+    msg += `\n\nWarning: ${warnings.length} component(s) belong to assemblies NOT YET in Odoo.\n` +
+      `Their BOMs cannot be completed until those assemblies are also transferred:\n\n` +
+      warnings.slice(0, 10).join('\n') +
+      (warnings.length > 10 ? `\n... and ${warnings.length - 10} more` : '') +
+      '\n\nContinue anyway?';
+  }
+  if (!confirm(msg)) return;
 
   const btn = document.getElementById('btn-transfer');
   btn.disabled = true;
