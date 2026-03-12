@@ -118,34 +118,54 @@ class ArenaClient:
         return all_items
 
     def get_items_for_sync(self) -> list[dict]:
-        """Fetch all items relevant for sync: all 'In Production' items plus
-        top-level assemblies (A-PRD-*) that are still 'In Design'.
+        """Fetch all items relevant for sync.
 
-        Each item gets an '_lifecycle' field set to the phase name so callers
-        can tell which phase it belongs to.
+        Inclusion rules:
+          1. All 'In Production' items — always included
+          2. 'In Design' TOP_LEVEL_ASSEMBLY — always included
+          3. 'In Design' SUB_ASSEMBLY — included only if at least one of
+             its BOM components is 'In Production'
+
+        Each item gets an '_lifecycle' field so callers know the phase.
         """
         all_raw = self.get_items()  # fetch everything (unfiltered)
 
+        # Pass 1: collect In Production GUIDs and sort candidates
+        in_prod_guids: set[str] = set()
+        design_subs: list[dict] = []
+
         result = []
-        seen_guids = set()
         for item in all_raw:
             phase = (item.get("lifecyclePhase") or {}).get("name", "")
-            number = item.get("number", "")
             asm_type = item.get("assemblyType", "")
-
             item["_lifecycle"] = phase
 
             if phase == "In Production":
                 result.append(item)
-                seen_guids.add(item.get("guid"))
+                in_prod_guids.add(item.get("guid", ""))
             elif phase == "In Design" and asm_type == "TOP_LEVEL_ASSEMBLY":
                 result.append(item)
-                seen_guids.add(item.get("guid"))
+            elif phase == "In Design" and asm_type == "SUB_ASSEMBLY":
+                design_subs.append(item)
 
-        logger.info("Arena: %d items for sync (%d In Production + %d In Design top-level)",
-                     len(result),
-                     sum(1 for i in result if i["_lifecycle"] == "In Production"),
-                     sum(1 for i in result if i["_lifecycle"] == "In Design"))
+        # Pass 2: check In Design sub-assemblies — include if any
+        # BOM component is In Production
+        design_sub_included = 0
+        for item in design_subs:
+            bom_lines = self.get_bom_for_item(item["guid"])
+            has_prod_component = any(
+                (line.get("item") or {}).get("guid") in in_prod_guids
+                for line in bom_lines
+            )
+            if has_prod_component:
+                result.append(item)
+                design_sub_included += 1
+
+        in_prod = sum(1 for i in result if i["_lifecycle"] == "In Production")
+        in_design = len(result) - in_prod
+        logger.info("Arena: %d items for sync (%d In Production, %d In Design: %d top-level + %d sub-assemblies)",
+                     len(result), in_prod, in_design,
+                     in_design - design_sub_included, design_sub_included)
         return result
 
     def get_item(self, guid: str) -> dict:
