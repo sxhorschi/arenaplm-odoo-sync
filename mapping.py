@@ -108,6 +108,9 @@ def map_arena_item_to_odoo_product(item: dict, mapping_config: dict) -> dict:
     """
     number = item.get("number", "")
     name = item.get("name", number)
+    lifecycle = item.get("_lifecycle") or item.get("lifecycle", "")
+    if lifecycle and lifecycle != "In Production":
+        name = f"{name} ({lifecycle})"
     cat = item.get("category") or ""
     category_name = cat.get("name", "") if isinstance(cat, dict) else str(cat)
     uom_name = item.get("uom", "")

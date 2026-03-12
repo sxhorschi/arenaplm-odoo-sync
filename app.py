@@ -233,6 +233,7 @@ def api_items():
             "revision": d.get("revision", ""),
             "category": d.get("category", ""),
             "assembly_type": d.get("assembly_type", ""),
+            "lifecycle": d.get("lifecycle", "In Production"),
             "bom_component_count": d.get("bom_component_count", 0),
             "bom_component_numbers": d.get("bom_component_numbers", []),
             "bom_components": enriched_comps,
@@ -288,7 +289,7 @@ def api_fetch_arena():
             except Exception as e:
                 log_activity("WARN", f"Odoo not reachable for cross-check: {e}")
 
-        items = arena.get_items(lifecycle_phase="In Production")
+        items = arena.get_items_for_sync()
         in_prod_guids = {i["guid"] for i in items}
 
         # Batch-fetch all products with default_code from Odoo
@@ -351,6 +352,8 @@ def api_fetch_arena():
                         "in_odoo": asm_in_odoo,
                     })
 
+            lifecycle = item.get("_lifecycle", "In Production")
+
             result.append({
                 "guid": guid,
                 "number": number,
@@ -358,6 +361,7 @@ def api_fetch_arena():
                 "revision": item.get("revisionNumber", ""),
                 "category": (item.get("category") or {}).get("name", ""),
                 "assembly_type": item.get("assemblyType", ""),
+                "lifecycle": lifecycle,
                 "bom_count": len(bom_lines),
                 "bom_components": [
                     {
@@ -473,6 +477,7 @@ def api_transfer():
                             "revision": item.get("revision", ""),
                             "category": item.get("category", ""),
                             "assembly_type": item.get("assembly_type", ""),
+                            "lifecycle": item.get("lifecycle", "In Production"),
                             "bom_component_count": item.get("bom_count", 0),
                             "bom_component_numbers": bom_comp_numbers,
                             "bom_components": bom_components,
@@ -508,7 +513,7 @@ def api_transfer():
             try:
                 arena = build_arena(config)
                 arena.authenticate()
-                all_items = arena.get_items(lifecycle_phase="In Production")
+                all_items = arena.get_items_for_sync()
                 assemblies = [i for i in all_items
                               if i.get("assemblyType") not in (None, "", "NOT_AN_ASSEMBLY")]
 
@@ -1040,7 +1045,7 @@ def api_category_preview():
         odoo.authenticate()
 
         # Get Arena categories from items
-        items = arena.get_items(lifecycle_phase="In Production")
+        items = arena.get_items_for_sync()
         arena_categories = sorted({
             (item.get("category") or {}).get("name", "")
             for item in items if (item.get("category") or {}).get("name")

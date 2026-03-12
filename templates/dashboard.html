@@ -906,7 +906,10 @@ async function refresh() {
                             i.status === 'ERROR' ? '<span class="badge error" title="'+esc(i.error)+'">error</span>' :
                             '<span class="badge pending">pending</span>';
         const isAsm = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
-        const typeBadge = isAsm ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>';
+        const isDesign = i.lifecycle && i.lifecycle !== 'In Production';
+        const typeBadge = isAsm
+          ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' + (isDesign ? ' <span class="badge" style="background:var(--orange-dim);color:var(--orange)">In Design</span>' : '')
+          : '<span class="badge component">Part</span>';
         const parents = i.used_in || [];
         const comps = i.bom_components || [];
         const missing = i.missing_components || [];
@@ -1217,7 +1220,7 @@ function renderFetchedItems() {
                 <td>${esc(i.name)}</td>
                 <td class="mono">${esc(i.revision)}</td>
                 <td style="color:var(--text-dim)">${esc(i.category)}</td>
-                <td>${isAssembly ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>'}</td>
+                <td>${isAssembly ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' + (i.lifecycle && i.lifecycle !== 'In Production' ? ' <span class="badge" style="background:var(--orange-dim);color:var(--orange)">' + esc(i.lifecycle) + '</span>' : '') : '<span class="badge component">Part</span>'}</td>
                 <td>${bomCell}</td>
               </tr>`;
 

@@ -123,7 +123,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
         # Build auto-match maps from Odoo categories and UoMs
         build_auto_maps(odoo)
 
-        items = arena.get_items(lifecycle_phase="In Production") or []
+        items = arena.get_items_for_sync() or []
         result["items_fetched"] = len(items)
         logger.info("Fetched %d items from Arena", len(items))
 
@@ -187,6 +187,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
             revision = item.get("revisionNumber", "")
             category = (item.get("category") or {}).get("name", "")
             assembly_type = item.get("assemblyType", "")
+            lifecycle = item.get("_lifecycle", "In Production")
             bom_lines = bom_map.get(guid, [])
 
             item_detail = {
@@ -303,6 +304,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "revision": revision,
                     "category": category,
                     "assembly_type": assembly_type,
+                    "lifecycle": lifecycle,
                     "bom_component_count": len(bom_lines),
                     "bom_component_numbers": bom_comp_numbers,
                     "bom_components": bom_components,
@@ -336,6 +338,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "revision": revision,
                     "category": category,
                     "assembly_type": assembly_type,
+                    "lifecycle": lifecycle,
                     "bom_component_count": len(bom_lines),
                     "bom_component_numbers": err_bom_nums,
                     "bom_components": err_bom_comps,

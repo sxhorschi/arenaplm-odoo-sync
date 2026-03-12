@@ -117,6 +117,37 @@ class ArenaClient:
         logger.info("Arena: fetched %d items (phase=%s)", len(all_items), lifecycle_phase or "all")
         return all_items
 
+    def get_items_for_sync(self) -> list[dict]:
+        """Fetch all items relevant for sync: all 'In Production' items plus
+        top-level assemblies (A-PRD-*) that are still 'In Design'.
+
+        Each item gets an '_lifecycle' field set to the phase name so callers
+        can tell which phase it belongs to.
+        """
+        all_raw = self.get_items()  # fetch everything (unfiltered)
+
+        result = []
+        seen_guids = set()
+        for item in all_raw:
+            phase = (item.get("lifecyclePhase") or {}).get("name", "")
+            number = item.get("number", "")
+            asm_type = item.get("assemblyType", "")
+
+            item["_lifecycle"] = phase
+
+            if phase == "In Production":
+                result.append(item)
+                seen_guids.add(item.get("guid"))
+            elif phase == "In Design" and asm_type == "TOP_LEVEL_ASSEMBLY":
+                result.append(item)
+                seen_guids.add(item.get("guid"))
+
+        logger.info("Arena: %d items for sync (%d In Production + %d In Design top-level)",
+                     len(result),
+                     sum(1 for i in result if i["_lifecycle"] == "In Production"),
+                     sum(1 for i in result if i["_lifecycle"] == "In Design"))
+        return result
+
     def get_item(self, guid: str) -> dict:
         return self._request("GET", f"/items/{guid}")
 
