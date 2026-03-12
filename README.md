@@ -27,14 +27,14 @@ All settings are entered through the dashboard UI (Settings page). No `.env` fil
 | **API Base URL** | For EU instances: `https://api.europe.arenaplm.com/v1`. For US: `https://api.arenasolutions.com/v1`. **Important:** This is the API endpoint, not the web UI URL (`app.europe.arenaplm.com`). |
 | **Email** | Your Arena login email. |
 | **Password** | Your Arena login password (same as web login). Arena does not use separate API keys. |
-| **Workspace ID** | Found in Arena web UI: go to **Settings > Workspace** (top-right gear icon). The 9-digit number shown there (e.g. `898811176`). Also visible in webhooks or admin settings. |
+| **Workspace ID** | Found in Arena web UI: go to **Settings > Workspace** (top-right gear icon). The 9-digit number shown there (e.g. `898421176`). Also visible in webhooks or admin settings. |
 
 ### Odoo ERP Connection
 
 | Field | Where to find it |
 |---|---|
 | **Odoo URL** | Your Odoo instance URL, e.g. `https://mycompany.odoo.com` or `https://myhost:8069`. Must include the port if non-standard. |
-| **Database** | The Odoo database name. Find it via: login page dropdown, or the badge in the top-left corner of the Odoo UI (e.g. `PRE_20260123081512`). For self-hosted instances, you can also query `https://your-odoo/web/database/list`. |
+| **Database** | The Odoo database name. Find it via: login page dropdown, or the badge in the top-left corner of the Odoo UI (e.g. `PRE_22549372081512`). For self-hosted instances, you can also query `https://your-odoo/web/database/list`. |
 | **Username** | Your Odoo login — typically your email address (e.g. `user@company.com`). |
 | **Password / API Key** | Either your Odoo login password, or an **API key** (recommended). To create an API key: Odoo UI > click your avatar (top-right) > **My Profile** > **Account Security** tab > **New API Key**. The generated key replaces the password field. |
 
