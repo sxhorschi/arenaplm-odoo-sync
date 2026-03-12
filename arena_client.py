@@ -120,19 +120,21 @@ class ArenaClient:
     def get_items_for_sync(self) -> list[dict]:
         """Fetch all items relevant for sync.
 
-        Inclusion rules:
-          1. All 'In Production' items — always included
-          2. 'In Design' TOP_LEVEL_ASSEMBLY — always included
-          3. 'In Design' SUB_ASSEMBLY — included only if at least one of
-             its BOM components is 'In Production'
+        Inclusion rules (hierarchy-aware):
+          Level 0 — TOP_LEVEL_ASSEMBLY: included if In Production OR In Design
+          Level 1 — SUB_ASSEMBLY (In Design): included only if
+                    (a) at least one BOM component is In Production, AND
+                    (b) it is referenced in the BOM of an included top-level assembly
+          Level 2 — Components (In Production): always included
 
         Each item gets an '_lifecycle' field so callers know the phase.
         """
         all_raw = self.get_items()  # fetch everything (unfiltered)
 
-        # Pass 1: collect In Production GUIDs and sort candidates
+        # ── Pass 1: classify items ──
         in_prod_guids: set[str] = set()
-        design_subs: list[dict] = []
+        top_levels: list[dict] = []        # TOP_LEVEL_ASSEMBLY in prod or design
+        design_subs: list[dict] = []       # SUB_ASSEMBLY in design (candidates)
 
         result = []
         for item in all_raw:
@@ -145,14 +147,40 @@ class ArenaClient:
                 in_prod_guids.add(item.get("guid", ""))
             elif phase == "In Design" and asm_type == "TOP_LEVEL_ASSEMBLY":
                 result.append(item)
+                top_levels.append(item)
             elif phase == "In Design" and asm_type == "SUB_ASSEMBLY":
                 design_subs.append(item)
 
-        # Pass 2: check In Design sub-assemblies — include if any
-        # BOM component is In Production
+        # Also collect In Production top-levels for BOM lookups
+        for item in result:
+            if item.get("assemblyType") == "TOP_LEVEL_ASSEMBLY" and item["_lifecycle"] == "In Production":
+                top_levels.append(item)
+
+        if not design_subs:
+            self._log_sync_stats(result, 0)
+            return result
+
+        # ── Pass 2: find which sub-assembly GUIDs are referenced by
+        #    included top-level assemblies ──
+        sub_guids_in_top_boms: set[str] = set()
+        for tl in top_levels:
+            bom_lines = self.get_bom_for_item(tl["guid"])
+            for line in bom_lines:
+                comp_guid = (line.get("item") or {}).get("guid", "")
+                if comp_guid:
+                    sub_guids_in_top_boms.add(comp_guid)
+
+        # ── Pass 3: include design sub-assemblies that pass both checks ──
         design_sub_included = 0
         for item in design_subs:
-            bom_lines = self.get_bom_for_item(item["guid"])
+            guid = item.get("guid", "")
+
+            # Check (b): referenced by an included top-level assembly?
+            if guid not in sub_guids_in_top_boms:
+                continue
+
+            # Check (a): has at least one In Production component?
+            bom_lines = self.get_bom_for_item(guid)
             has_prod_component = any(
                 (line.get("item") or {}).get("guid") in in_prod_guids
                 for line in bom_lines
@@ -161,12 +189,15 @@ class ArenaClient:
                 result.append(item)
                 design_sub_included += 1
 
+        self._log_sync_stats(result, design_sub_included)
+        return result
+
+    def _log_sync_stats(self, result: list[dict], design_sub_count: int) -> None:
         in_prod = sum(1 for i in result if i["_lifecycle"] == "In Production")
         in_design = len(result) - in_prod
         logger.info("Arena: %d items for sync (%d In Production, %d In Design: %d top-level + %d sub-assemblies)",
                      len(result), in_prod, in_design,
-                     in_design - design_sub_included, design_sub_included)
-        return result
+                     in_design - design_sub_count, design_sub_count)
 
     def get_item(self, guid: str) -> dict:
         return self._request("GET", f"/items/{guid}")
