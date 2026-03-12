@@ -909,6 +909,13 @@ async function refresh() {
         const parents = i.used_in || [];
         const comps = i.bom_components || [];
 
+        // If bom_components is empty, build from bom_component_numbers (old state entries)
+        if (comps.length === 0 && i.bom_component_numbers && i.bom_component_numbers.length > 0) {
+          for (const cn of i.bom_component_numbers) {
+            comps.push({number: cn, name: '', qty: ''});
+          }
+        }
+
         let usedInCell = '';
         if (isAsm && comps.length > 0) {
           usedInCell = `<span class="bom-toggle" onclick="toggleBom('ibom-${idx}', this)">` +
