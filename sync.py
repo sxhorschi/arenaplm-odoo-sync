@@ -133,7 +133,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
             return result
 
         # Build a lookup of all in-production GUIDs for dependency checks
-        in_production_guids = {item["guid"] for item in items}
+        in_production_guids = {item["guid"] for item in items if item.get("_lifecycle") == "In Production"}
 
         # ── 2. Fetch BOMs for assemblies only ─────────────────────────
         bom_map: dict[str, list[dict]] = {}

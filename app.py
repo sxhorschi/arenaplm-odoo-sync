@@ -290,7 +290,7 @@ def api_fetch_arena():
                 log_activity("WARN", f"Odoo not reachable for cross-check: {e}")
 
         items = arena.get_items_for_sync()
-        in_prod_guids = {i["guid"] for i in items}
+        in_prod_guids = {i["guid"] for i in items if i.get("_lifecycle") == "In Production"}
 
         # Batch-fetch all products with default_code from Odoo
         odoo_products = {}  # {default_code: template_id}
