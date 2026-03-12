@@ -900,22 +900,28 @@ async function refresh() {
     if (items.length === 0) {
       iTbody.innerHTML = '<tr><td colspan="11" class="empty">No items synced yet. Run a sync from the Dashboard.</td></tr>';
     } else {
-      iTbody.innerHTML = items.map(i => {
+      iTbody.innerHTML = items.map((i, idx) => {
         const statusBadge = i.status === 'SYNCED' ? '<span class="badge synced">synced</span>' :
                             i.status === 'ERROR' ? '<span class="badge error" title="'+esc(i.error)+'">error</span>' :
                             '<span class="badge pending">pending</span>';
         const isAsm = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
         const typeBadge = isAsm ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>';
         const parents = i.used_in || [];
+        const comps = i.bom_components || [];
+
         let usedInCell = '';
-        if (isAsm && i.bom_component_count) {
+        if (isAsm && comps.length > 0) {
+          usedInCell = `<span class="bom-toggle" onclick="toggleBom('ibom-${idx}', this)">` +
+            `<span class="arrow">&#9654;</span> ${comps.length} components</span>`;
+        } else if (isAsm && i.bom_component_count) {
           usedInCell = '<span style="color:var(--accent);font-size:11px">' + i.bom_component_count + ' components</span>';
         } else if (parents.length > 0) {
           usedInCell = '<div class="used-in-tags">' + parents.map(p => '<span class="used-in-tag">'+esc(p)+'</span>').join('') + '</div>';
         } else {
           usedInCell = '<span style="color:var(--text-muted)">--</span>';
         }
-        return `<tr>
+
+        let rows = `<tr>
           <td>${statusBadge}</td>
           <td class="mono"><strong>${esc(i.number)}</strong></td>
           <td>${esc(i.name)}</td>
@@ -928,6 +934,27 @@ async function refresh() {
           <td style="font-size:11px;color:var(--text-muted)">${i.synced_at ? new Date(i.synced_at).toLocaleString() : ''}</td>
           <td><button class="btn sm" onclick="resetItem('${i.guid}')">Reset</button></td>
         </tr>`;
+
+        // Expandable BOM sub-rows for assemblies
+        if (isAsm && comps.length > 0) {
+          rows += `<tr class="bom-sub-row" id="ibom-${idx}" style="display:none">
+            <td colspan="11">
+              <table class="bom-sub-table">
+                <tr>
+                  <td class="comp-indent" style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Component</td>
+                  <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Name</td>
+                  <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;width:60px">Qty</td>
+                </tr>
+                ${comps.map(c => `<tr>
+                  <td class="comp-indent mono">${esc(c.number)}</td>
+                  <td>${esc(c.name)}</td>
+                  <td class="mono">${c.qty}</td>
+                </tr>`).join('')}
+              </table>
+            </td>
+          </tr>`;
+        }
+        return rows;
       }).join('');
     }
 

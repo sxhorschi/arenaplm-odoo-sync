@@ -190,6 +190,7 @@ def api_items():
             "assembly_type": d.get("assembly_type", ""),
             "bom_component_count": d.get("bom_component_count", 0),
             "bom_component_numbers": d.get("bom_component_numbers", []),
+            "bom_components": d.get("bom_components", []),
             "used_in": comp_to_parents.get(d.get("number", ""), []),
             "status": d.get("status", "PENDING"),
             "error": d.get("error"),
@@ -412,8 +413,10 @@ def api_transfer():
                         # Add to lookup map so BOM phase can find this product
                         code_map[number] = tmpl_id
 
-                        # Extract component numbers from bom_components for "Used In" lookup
-                        bom_comp_numbers = [c.get("number", "") for c in item.get("bom_components", []) if c.get("number")]
+                        # Store BOM component details for "Used In" and expandable rows
+                        raw_comps = item.get("bom_components", [])
+                        bom_comp_numbers = [c.get("number", "") for c in raw_comps if c.get("number")]
+                        bom_components = [{"number": c.get("number",""), "name": c.get("name",""), "qty": c.get("qty",0)} for c in raw_comps if c.get("number")]
 
                         state["items"][guid] = {
                             "number": number,
@@ -423,6 +426,7 @@ def api_transfer():
                             "assembly_type": item.get("assembly_type", ""),
                             "bom_component_count": item.get("bom_count", 0),
                             "bom_component_numbers": bom_comp_numbers,
+                            "bom_components": bom_components,
                             "hash": "",
                             "status": "SYNCED",
                             "error": None,

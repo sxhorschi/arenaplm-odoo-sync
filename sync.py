@@ -281,12 +281,18 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                                         existing_bom_id, number, len(new_lines))
 
                 # ── Update state ─────────────────────────────────────
-                # Extract component part numbers for "Used In" reverse lookup
+                bom_components = []
                 bom_comp_numbers = []
                 for bl in bom_lines:
-                    cn = (bl.get("item") or {}).get("number", "")
+                    ci = bl.get("item") or {}
+                    cn = ci.get("number", "")
                     if cn:
                         bom_comp_numbers.append(cn)
+                        bom_components.append({
+                            "number": cn,
+                            "name": ci.get("name", ""),
+                            "qty": bl.get("quantity", 0),
+                        })
 
                 state["items"][guid] = {
                     "number": number,
@@ -296,6 +302,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "assembly_type": assembly_type,
                     "bom_component_count": len(bom_lines),
                     "bom_component_numbers": bom_comp_numbers,
+                    "bom_components": bom_components,
                     "hash": item_hash,
                     "status": "SYNCED",
                     "error": None,
@@ -311,6 +318,15 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                 item_detail["error"] = str(e)
                 result["errors"].append({"number": number, "name": name, "error": str(e)})
 
+                err_bom_comps = []
+                err_bom_nums = []
+                for bl in bom_lines:
+                    ci = bl.get("item") or {}
+                    cn = ci.get("number", "")
+                    if cn:
+                        err_bom_nums.append(cn)
+                        err_bom_comps.append({"number": cn, "name": ci.get("name", ""), "qty": bl.get("quantity", 0)})
+
                 state["items"][guid] = {
                     "number": number,
                     "name": name,
@@ -318,7 +334,8 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     "category": category,
                     "assembly_type": assembly_type,
                     "bom_component_count": len(bom_lines),
-                    "bom_component_numbers": [(bl.get("item") or {}).get("number", "") for bl in bom_lines if (bl.get("item") or {}).get("number")],
+                    "bom_component_numbers": err_bom_nums,
+                    "bom_components": err_bom_comps,
                     "hash": "",
                     "status": "ERROR",
                     "error": str(e),
