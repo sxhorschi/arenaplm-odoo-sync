@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arena → Odoo Sync</title>
+  <style>
+    :root {
+      --bg: #0b0d11;
+      --surface: #13161d;
+      --surface2: #1a1e28;
+      --surface3: #222838;
+      --border: #2a3040;
+      --border-light: #353d52;
+      --text: #e2e5f0;
+      --text-dim: #7b8298;
+      --text-muted: #505672;
+      --accent: #5b7cfa;
+      --accent-hover: #7b96ff;
+      --accent-dim: rgba(91,124,250,0.12);
+      --green: #22c55e;
+      --green-dim: rgba(34,197,94,0.12);
+      --red: #ef4444;
+      --red-dim: rgba(239,68,68,0.12);
+      --orange: #f59e0b;
+      --orange-dim: rgba(245,158,11,0.12);
+      --purple: #a78bfa;
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    /* ── Shell ──────────────────────────────────── */
+    .shell { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 220px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      overflow-y: auto;
+    }
+    .sidebar-brand {
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .sidebar-brand h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
+    .sidebar-brand h1 span { color: var(--text-dim); font-weight: 400; }
+    .sidebar-brand .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 20px;
+      font-size: 13px; font-weight: 500;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.12s;
+      border-left: 2px solid transparent;
+    }
+    .nav-item:hover { color: var(--text); background: var(--surface2); }
+    .nav-item.active {
+      color: var(--accent);
+      background: var(--accent-dim);
+      border-left-color: var(--accent);
+    }
+    .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+    .nav-section {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      padding: 16px 20px 6px;
+      font-weight: 600;
+    }
+
+    .content { margin-left: 220px; flex: 1; padding: 28px 32px; max-width: 1200px; }
+
+    /* ── Topbar in content ───────────────────────── */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    .page-header h2 { font-size: 18px; font-weight: 600; }
+    .header-actions { display: flex; gap: 8px; align-items: center; }
+
+    /* ── Stats row ──────────────────────────────── */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+    .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 6px; }
+    .stat .val { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .stat .val.g { color: var(--green); }
+    .stat .val.r { color: var(--red); }
+    .stat .val.o { color: var(--orange); }
+    .stat .val.a { color: var(--accent); }
+    .stat .val.p { color: var(--purple); }
+
+    /* ── Cards / Panels ─────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .card-body { padding: 18px; }
+    .card-body.flush { padding: 0; }
+
+    /* ── Buttons ─────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      font-size: 12px; font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--surface3); border-color: var(--border-light); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: var(--accent-hover); }
+    .btn.danger { color: var(--red); border-color: rgba(239,68,68,0.3); }
+    .btn.success { color: var(--green); border-color: rgba(34,197,94,0.3); }
+    .btn.sm { padding: 4px 10px; font-size: 11px; }
+
+    /* ── Table ───────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; padding: 9px 14px;
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted);
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0;
+    }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(91,124,250,0.03); }
+    .mono { font-family: 'SF Mono','Cascadia Code','Consolas',monospace; font-size: 12px; }
+
+    /* ── Badges ──────────────────────────────────── */
+    .badge {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 10px; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .badge.synced { background: var(--green-dim); color: var(--green); }
+    .badge.error { background: var(--red-dim); color: var(--red); }
+    .badge.pending { background: var(--orange-dim); color: var(--orange); }
+    .badge.assembly { background: var(--accent-dim); color: var(--accent); }
+    .badge.component { background: rgba(167,139,250,0.12); color: var(--purple); }
+    .badge.missing { background: var(--red-dim); color: var(--red); }
+
+    /* ── Form ────────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+    .form-group label {
+      display: block; font-size: 12px; font-weight: 600;
+      color: var(--text-dim); margin-bottom: 5px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: var(--accent);
+    }
+    .form-group input::placeholder { color: var(--text-muted); }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+    /* ── Connection status ────────────────────────── */
+    .conn-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .conn-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .conn-dot.ok { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.3); }
+    .conn-dot.err { background: var(--red); }
+    .conn-dot.off { background: var(--text-muted); }
+    .conn-msg { font-size: 12px; color: var(--text-dim); margin-top: 8px; min-height: 16px; }
+
+    /* ── Log ──────────────────────────────────────── */
+    .log-scroll { max-height: 400px; overflow-y: auto; }
+    .log-entry {
+      padding: 7px 14px; border-bottom: 1px solid var(--border);
+      font-size: 11px; display: flex; gap: 10px;
+      font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-ts { color: var(--text-muted); white-space: nowrap; min-width: 170px; }
+    .log-lv { font-weight: 700; min-width: 44px; }
+    .log-lv.OK { color: var(--green); }
+    .log-lv.ERROR { color: var(--red); }
+    .log-lv.WARN { color: var(--orange); }
+    .log-lv.INFO { color: var(--accent); }
+    .log-msg { flex: 1; word-break: break-word; color: var(--text-dim); }
+
+    /* ── Run history ──────────────────────────────── */
+    .run-bar { display: flex; gap: 3px; align-items: flex-end; height: 40px; margin-top: 8px; }
+    .run-bar .bar {
+      flex: 1; min-width: 8px; max-width: 24px;
+      border-radius: 3px 3px 0 0;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    .run-bar .bar:hover { opacity: 0.7; }
+
+    /* ── Pages ────────────────────────────────────── */
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* ── Empty state ─────────────────────────────── */
+    .empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 13px; }
+
+    /* ── Spinner ──────────────────────────────────── */
+    .spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.5s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .pulse { animation: pulse-a 2s ease-in-out infinite; }
+    @keyframes pulse-a { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ── Setup banner ─────────────────────────────── */
+    .setup-banner {
+      background: linear-gradient(135deg, rgba(91,124,250,0.15), rgba(167,139,250,0.1));
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-lg);
+      padding: 24px 28px;
+      margin-bottom: 24px;
+    }
+    .setup-banner h3 { font-size: 16px; margin-bottom: 8px; }
+    .setup-banner p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; }
+    .setup-banner .steps { display: flex; gap: 20px; flex-wrap: wrap; }
+    .setup-banner .step {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; font-weight: 500;
+    }
+    .setup-banner .step-num {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; flex-shrink: 0;
+    }
+    .setup-banner .step-num.done { background: var(--green); }
+
+    /* ── Responsive ──────────────────────────────── */
+    @media (max-width: 900px) {
+      .sidebar { width: 180px; }
+      .content { margin-left: 180px; }
+      .form-row { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .status-bar { left: 180px; }
+    }
+    @media (max-width: 600px) {
+      .sidebar { width: 56px; }
+      .sidebar .nav-item span, .sidebar .sidebar-brand .sub,
+      .sidebar .nav-section { display: none; }
+      .sidebar .nav-item { padding: 12px 20px; justify-content: center; }
+      .sidebar-brand h1 { font-size: 12px; }
+      .content { margin-left: 56px; padding: 16px; }
+      .status-bar { left: 56px; }
+    }
+
+    /* ── Tooltip ──────────────────────────────────── */
+    .scroll-table { max-height: 500px; overflow-y: auto; }
+
+    .status-bar {
+      position: fixed; bottom: 0; left: 220px; right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 6px 20px;
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      z-index: 10;
+    }
+    .status-bar .dot {
+      width: 6px; height: 6px; border-radius: 50%; display: inline-block;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══ Sidebar ═══════════════════════════════════════ -->
+<div class="shell">
+  <div class="sidebar">
+    <div class="sidebar-brand">
+      <h1>Arena <span>→</span> Odoo</h1>
+      <div class="sub">Product & BOM Sync</div>
+    </div>
+
+    <div class="nav-section">Overview</div>
+    <div class="nav-item active" onclick="showPage('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </div>
+
+    <div class="nav-section">Data</div>
+    <div class="nav-item" onclick="showPage('items')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+      Synced Items
+    </div>
+    <div class="nav-item" onclick="showPage('transfer')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
+      Transfer
+    </div>
+    <div class="nav-item" onclick="showPage('missing')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      Missing Components
+    </div>
+
+    <div class="nav-section">System</div>
+    <div class="nav-item" onclick="showPage('settings')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </div>
+    <div class="nav-item" onclick="showPage('log')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Activity Log
+    </div>
+  </div>
+
+  <div class="content" style="padding-bottom: 50px;">
+
+    <!-- ═══ PAGE: Dashboard ══════════════════════════ -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h2>Dashboard</h2>
+        <div class="header-actions">
+          <span id="sched-badge" style="font-size:11px;color:var(--text-muted)"></span>
+          <button class="btn sm" id="btn-sched" onclick="toggleScheduler()">Start Auto-Sync</button>
+          <button class="btn primary" id="btn-sync" onclick="triggerSync()">Sync Now</button>
+        </div>
+      </div>
+
+      <!-- Setup banner (hidden once both APIs configured) -->
+      <div class="setup-banner" id="setup-banner" style="display:none;">
+        <h3>Welcome — let's connect your systems</h3>
+        <p>Enter your Arena PLM and Odoo ERP credentials to start syncing products and BOMs.</p>
+        <div class="steps">
+          <div class="step"><span class="step-num" id="step1-dot">1</span> <span id="step1-text">Configure Arena API</span></div>
+          <div class="step"><span class="step-num" id="step2-dot">2</span> <span id="step2-text">Configure Odoo API</span></div>
+          <div class="step"><span class="step-num" id="step3-dot">3</span> Run your first sync</div>
+        </div>
+        <button class="btn primary" style="margin-top:16px;" onclick="showPage('settings')">Go to Settings</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="label">In Production</div><div class="val a" id="s-total">—</div></div>
+        <div class="stat"><div class="label">Synced to Odoo</div><div class="val g" id="s-synced">—</div></div>
+        <div class="stat"><div class="label">Assemblies</div><div class="val" id="s-assemblies">—</div></div>
+        <div class="stat"><div class="label">Components</div><div class="val p" id="s-components">—</div></div>
+        <div class="stat"><div class="label">BOMs Created</div><div class="val" id="s-boms">—</div></div>
+        <div class="stat"><div class="label">Errors</div><div class="val r" id="s-errors">—</div></div>
+      </div>
+
+      <!-- Last run summary -->
+      <div class="card">
+        <div class="card-head">
+          <span>Last Sync Result</span>
+          <span id="last-run-time" style="font-size:11px;color:var(--text-muted)"></span>
+        </div>
+        <div class="card-body" id="last-run-body">
+          <div class="empty">No sync has been run yet. Configure your API keys in Settings, then click "Sync Now".</div>
+        </div>
+      </div>
+
+      <!-- Run history chart -->
+      <div class="card">
+        <div class="card-head">Sync History (last 20 runs)</div>
+        <div class="card-body">
+          <div id="run-history-chart" class="empty">No run history yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE: Items ══════════════════════════════ -->
+    <div class="page" id="page-items">
+      <div class="page-header">
+        <h2>Synced Items</h2>
+        <div class="header-actions">
+          <button class="btn sm danger" onclick="resetErrors()">Reset All Errors</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body flush">
+          <div class="scroll-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Part #</th>
+                  <th>Name</th>
+                  <th>Rev</th>
+                  <th>Type</th>
+                  <th>Category</th>
+                  <th>BOM</th>
+                  <th>Odoo Product</th>
+                  <th>Odoo BOM</th>
+                  <th>Synced</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="items-tbody">
+                <tr><td colspan="11" class="empty">No items yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE: Transfer ═════════════════════════════ -->
+    <div class="page" id="page-transfer">
+      <div class="page-header">
+        <h2>Transfer to Odoo</h2>
+        <div class="header-actions">
+          <button class="btn primary" onclick="fetchArenaItems()" id="btn-fetch">Fetch from Arena</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
+        Fetch all "In Production" items from Arena, review which ones are already in Odoo, select items to transfer, then push to Odoo.
+      </p>
+
+      <!-- Transfer progress overlay -->
+      <div id="transfer-progress" style="display:none;margin-bottom:16px;">
+        <div class="card">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+              <span class="spinner"></span>
+              <strong id="tp-label">Transferring...</strong>
+            </div>
+            <div style="background:var(--surface3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:8px;">
+              <div id="tp-bar" style="height:100%;background:var(--accent);transition:width 0.3s;width:0%"></div>
+            </div>
+            <div style="font-size:12px;color:var(--text-dim);">
+              <span id="tp-count">0 / 0</span> &mdash; <span id="tp-current"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transfer results -->
+      <div id="transfer-results" style="display:none;margin-bottom:16px;"></div>
+
+      <!-- Filter tabs + action bar -->
+      <div id="fetch-toolbar" style="display:none;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;gap:4px;">
+            <button class="btn sm" onclick="filterItems('all')" id="ft-all">All <span id="ft-all-n"></span></button>
+            <button class="btn sm" onclick="filterItems('new')" id="ft-new">New Only <span id="ft-new-n"></span></button>
+            <button class="btn sm" onclick="filterItems('exists')" id="ft-exists">Already in Odoo <span id="ft-exists-n"></span></button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn sm" onclick="selectAllVisible()">Select All Visible</button>
+            <button class="btn sm" onclick="selectNewOnly()">Select New Only</button>
+            <button class="btn sm" onclick="deselectAll()">Deselect All</button>
+            <span style="font-size:12px;color:var(--text-dim);" id="sel-count">0 selected</span>
+            <button class="btn primary" onclick="transferSelected()" id="btn-transfer" disabled>Transfer Selected</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Items table -->
+      <div id="fetch-container"></div>
+    </div>
+
+    <!-- ═══ PAGE: Missing Components ═════════════════ -->
+    <div class="page" id="page-missing">
+      <div class="page-header">
+        <h2>Missing BOM Components</h2>
+      </div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
+        Components referenced in BOMs that are <strong>not yet "In Production"</strong> in Arena.
+        These will be skipped when creating BOMs in Odoo — the procurement team cannot order them until they're released.
+      </p>
+      <div class="card">
+        <div class="card-body flush">
+          <table>
+            <thead>
+              <tr>
+                <th>Missing Component</th>
+                <th>Needed By (Assembly)</th>
+                <th>Qty Needed</th>
+              </tr>
+            </thead>
+            <tbody id="missing-tbody">
+              <tr><td colspan="3" class="empty">Run a sync or preview to see missing components.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE: Settings ═══════════════════════════ -->
+    <div class="page" id="page-settings">
+      <div class="page-header"><h2>Settings</h2></div>
+
+      <!-- Arena -->
+      <div class="card">
+        <div class="card-head">
+          <span>Arena PLM Connection</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span class="conn-dot off" id="arena-dot"></span>
+            <button class="btn sm" onclick="testArena()" id="btn-test-arena">Test</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label>API Base URL</label>
+            <input id="cfg-arena-url" placeholder="https://api.arenasolutions.com/v1">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Email</label>
+              <input id="cfg-arena-email" type="email" placeholder="integration-user@company.com">
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input id="cfg-arena-password" type="password" placeholder="Leave blank to keep current">
+              <div class="form-hint" id="arena-pw-hint"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Workspace ID</label>
+            <input id="cfg-arena-workspace" placeholder="9-digit workspace ID">
+            <div class="form-hint">Found in Arena PLM → Settings → Workspace</div>
+          </div>
+          <div class="conn-msg" id="arena-test-msg"></div>
+        </div>
+      </div>
+
+      <!-- Odoo -->
+      <div class="card">
+        <div class="card-head">
+          <span>Odoo ERP Connection</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span class="conn-dot off" id="odoo-dot"></span>
+            <button class="btn sm" onclick="testOdoo()" id="btn-test-odoo">Test</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Odoo URL</label>
+              <input id="cfg-odoo-url" placeholder="https://your-odoo.com">
+            </div>
+            <div class="form-group">
+              <label>Database</label>
+              <input id="cfg-odoo-db" placeholder="odoo-production">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Username</label>
+              <input id="cfg-odoo-user" placeholder="admin">
+            </div>
+            <div class="form-group">
+              <label>Password / API Key</label>
+              <input id="cfg-odoo-password" type="password" placeholder="Leave blank to keep current">
+              <div class="form-hint" id="odoo-pw-hint"></div>
+            </div>
+          </div>
+          <div class="conn-msg" id="odoo-test-msg"></div>
+        </div>
+      </div>
+
+      <!-- Test Product Creation -->
+      <div class="card">
+        <div class="card-head">
+          <span>Test Product Creation</span>
+        </div>
+        <div class="card-body">
+          <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">
+            Verify that the sync tool can create products in Odoo. Creates a test product and deletes it, or keep it if you want to inspect it in Odoo.
+          </p>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Product Name</label>
+              <input id="test-product-name" value="SYNC-TEST-PRODUCT" placeholder="Test product name">
+            </div>
+            <div class="form-group">
+              <label>Internal Reference</label>
+              <input id="test-product-code" value="ARENA-TEST-001" placeholder="default_code">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn primary" onclick="testCreateProduct(false)">Create & Delete (verify only)</button>
+            <button class="btn success" onclick="testCreateProduct(true)">Create & Keep in Odoo</button>
+          </div>
+          <div class="conn-msg" id="test-product-msg" style="margin-top:10px;"></div>
+        </div>
+      </div>
+
+      <!-- Sync -->
+      <div class="card">
+        <div class="card-head">Sync Settings</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Auto-Sync Interval (minutes)</label>
+              <input id="cfg-sync-interval" type="number" min="1" value="15">
+            </div>
+            <div class="form-group">
+              <label>Default Odoo Category ID</label>
+              <input id="cfg-default-cat" type="number" min="1" value="1">
+              <div class="form-hint">Fallback when Arena category has no mapping</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Default Odoo UoM ID</label>
+            <input id="cfg-default-uom" type="number" min="1" value="1">
+            <div class="form-hint">Fallback unit of measure (1 = "Units" in most Odoo installs)</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn primary" onclick="saveSettings()" style="margin-top:4px;">Save All Settings</button>
+      <span id="save-msg" style="margin-left:12px;font-size:12px;"></span>
+    </div>
+
+    <!-- ═══ PAGE: Activity Log ═══════════════════════ -->
+    <div class="page" id="page-log">
+      <div class="page-header"><h2>Activity Log</h2></div>
+      <div class="card">
+        <div class="card-body flush">
+          <div class="log-scroll" id="log-container">
+            <div class="empty">No activity yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /shell -->
+
+<!-- Status bar -->
+<div class="status-bar">
+  <span><span class="dot" id="sb-arena-dot" style="background:var(--text-muted)"></span> Arena</span>
+  <span><span class="dot" id="sb-odoo-dot" style="background:var(--text-muted)"></span> Odoo</span>
+  <span id="sb-scheduler" style="margin-left:auto;"></span>
+  <span id="sb-last-sync"></span>
+</div>
+
+<script>
+// ═══ State ═════════════════════════════════════════════
+let schedulerActive = false;
+let lastMissingComponents = [];
+
+// ═══ Navigation ════════════════════════════════════════
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  // Highlight nav
+  const navs = document.querySelectorAll('.nav-item');
+  const map = {dashboard:0, items:1, transfer:2, missing:3, settings:4, log:5};
+  if (map[name] !== undefined && navs[map[name]]) navs[map[name]].classList.add('active');
+}
+
+// ═══ API helpers ═══════════════════════════════════════
+async function api(url, opts={}) {
+  const r = await fetch(url, {headers:{'Content-Type':'application/json'}, ...opts});
+  return r.json();
+}
+function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
+
+// ═══ Refresh loop ══════════════════════════════════════
+async function refresh() {
+  try {
+    const [status, items, logs] = await Promise.all([
+      api('/api/status'), api('/api/items'), api('/api/activity')
+    ]);
+
+    // ── Stats
+    const st = status.stats;
+    document.getElementById('s-total').textContent = st.total || '0';
+    document.getElementById('s-synced').textContent = st.synced || '0';
+    document.getElementById('s-assemblies').textContent = st.assemblies || '0';
+    document.getElementById('s-components').textContent = st.components || '0';
+    document.getElementById('s-boms').textContent = st.with_bom || '0';
+    document.getElementById('s-errors').textContent = st.errored || '0';
+
+    // ── Sync button
+    const syncBtn = document.getElementById('btn-sync');
+    if (status.runtime.running) {
+      syncBtn.disabled = true;
+      syncBtn.innerHTML = '<span class="spinner"></span> Syncing…';
+    } else {
+      syncBtn.disabled = false;
+      syncBtn.textContent = 'Sync Now';
+    }
+
+    // ── Scheduler
+    schedulerActive = status.runtime.scheduler_active;
+    const schedBtn = document.getElementById('btn-sched');
+    const schedBadge = document.getElementById('sched-badge');
+    const sbSched = document.getElementById('sb-scheduler');
+    if (schedulerActive) {
+      schedBtn.textContent = 'Stop Auto-Sync';
+      schedBtn.className = 'btn sm danger';
+      schedBadge.innerHTML = '<span class="conn-dot ok pulse" style="display:inline-block;width:6px;height:6px;vertical-align:middle;margin-right:4px"></span>Auto-sync active';
+      sbSched.innerHTML = '<span class="dot pulse" style="background:var(--green)"></span> Auto-sync ON';
+    } else {
+      schedBtn.textContent = 'Start Auto-Sync';
+      schedBtn.className = 'btn sm success';
+      schedBadge.textContent = '';
+      sbSched.textContent = 'Auto-sync OFF';
+    }
+
+    // ── Config status dots
+    const arenaOk = status.config_ok.arena;
+    const odooOk = status.config_ok.odoo;
+    document.getElementById('sb-arena-dot').style.background = arenaOk ? 'var(--green)' : 'var(--text-muted)';
+    document.getElementById('sb-odoo-dot').style.background = odooOk ? 'var(--green)' : 'var(--text-muted)';
+
+    // ── Setup banner
+    const banner = document.getElementById('setup-banner');
+    if (!arenaOk || !odooOk) {
+      banner.style.display = 'block';
+      document.getElementById('step1-dot').className = 'step-num' + (arenaOk ? ' done' : '');
+      document.getElementById('step1-text').innerHTML = arenaOk ? '<s>Configure Arena API</s> Done' : 'Configure Arena API';
+      document.getElementById('step2-dot').className = 'step-num' + (odooOk ? ' done' : '');
+      document.getElementById('step2-text').innerHTML = odooOk ? '<s>Configure Odoo API</s> Done' : 'Configure Odoo API';
+    } else {
+      banner.style.display = 'none';
+    }
+
+    // ── Last sync time
+    const sbLast = document.getElementById('sb-last-sync');
+    if (status.runtime.last_run) {
+      sbLast.textContent = 'Last sync: ' + new Date(status.runtime.last_run).toLocaleTimeString();
+      document.getElementById('last-run-time').textContent = new Date(status.runtime.last_run).toLocaleString();
+    }
+
+    // ── Last run summary
+    const lr = status.last_run;
+    const lrBody = document.getElementById('last-run-body');
+    if (lr && !lr.error) {
+      const missing = lr.missing_components || [];
+      lastMissingComponents = missing;
+      lrBody.innerHTML = `
+        <div class="stats" style="margin-bottom:0">
+          <div class="stat"><div class="label">Fetched</div><div class="val a">${lr.items_fetched}</div></div>
+          <div class="stat"><div class="label">Created</div><div class="val g">${lr.products_created}</div></div>
+          <div class="stat"><div class="label">Updated</div><div class="val">${lr.products_updated}</div></div>
+          <div class="stat"><div class="label">BOMs</div><div class="val">${lr.boms_created}</div></div>
+          <div class="stat"><div class="label">Unchanged</div><div class="val">${lr.skipped_unchanged}</div></div>
+          <div class="stat"><div class="label">Errors</div><div class="val r">${lr.errors?.length||0}</div></div>
+        </div>
+        ${missing.length ? '<div style="margin-top:12px;padding:10px 14px;background:var(--orange-dim);border-radius:6px;font-size:12px;color:var(--orange)"><strong>'+missing.length+' BOM components</strong> are not yet "In Production" in Arena — their BOM lines were skipped in Odoo. <a href="#" onclick="showPage(\'missing\');return false" style="color:var(--orange);text-decoration:underline">View details</a></div>' : ''}
+        ${lr.errors?.length ? '<div style="margin-top:8px;padding:10px 14px;background:var(--red-dim);border-radius:6px;font-size:12px;color:var(--red)"><strong>'+lr.errors.length+' items failed:</strong> ' + lr.errors.map(e=>esc(e.number)+': '+esc(e.error)).join(', ') + '</div>' : ''}
+      `;
+    } else if (lr && lr.error) {
+      lrBody.innerHTML = '<div style="padding:10px 14px;background:var(--red-dim);border-radius:6px;font-size:12px;color:var(--red)">' + esc(lr.error) + '</div>';
+    }
+
+    // ── Run history chart
+    const runs = status.run_history || [];
+    const chartEl = document.getElementById('run-history-chart');
+    if (runs.length > 0) {
+      const maxVal = Math.max(...runs.map(r => r.fetched || 1));
+      chartEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:4px">
+          <span>Newest</span><span>Oldest</span>
+        </div>
+        <div class="run-bar">
+          ${runs.map(r => {
+            const h = Math.max(8, (r.fetched / maxVal) * 36);
+            const color = r.errors > 0 ? 'var(--red)' : 'var(--green)';
+            const title = `${r.started_at?.substring(0,16)} — ${r.created} created, ${r.errors} errors`;
+            return `<div class="bar" style="height:${h}px;background:${color}" title="${esc(title)}"></div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px">${runs.length} runs recorded</div>
+      `;
+    }
+
+    // ── Missing components table
+    const mTbody = document.getElementById('missing-tbody');
+    if (lastMissingComponents.length > 0) {
+      mTbody.innerHTML = lastMissingComponents.map(m => `
+        <tr>
+          <td><span class="badge missing">MISSING</span> <strong>${esc(m.component_number)}</strong> — ${esc(m.component_name)}</td>
+          <td>${esc(m.parent_number)} — ${esc(m.parent_name)}</td>
+          <td class="mono">${m.quantity}</td>
+        </tr>
+      `).join('');
+    }
+
+    // ── Items table
+    const iTbody = document.getElementById('items-tbody');
+    if (items.length === 0) {
+      iTbody.innerHTML = '<tr><td colspan="11" class="empty">No items synced yet. Run a sync from the Dashboard.</td></tr>';
+    } else {
+      iTbody.innerHTML = items.map(i => {
+        const statusBadge = i.status === 'SYNCED' ? '<span class="badge synced">synced</span>' :
+                            i.status === 'ERROR' ? '<span class="badge error" title="'+esc(i.error)+'">error</span>' :
+                            '<span class="badge pending">pending</span>';
+        const typeBadge = i.assembly_type ? '<span class="badge assembly">asm</span>' : '<span class="badge component">part</span>';
+        return `<tr>
+          <td>${statusBadge}</td>
+          <td class="mono"><strong>${esc(i.number)}</strong></td>
+          <td>${esc(i.name)}</td>
+          <td class="mono">${esc(i.revision)}</td>
+          <td>${typeBadge}</td>
+          <td style="color:var(--text-dim)">${esc(i.category)}</td>
+          <td class="mono">${i.bom_component_count || '—'}</td>
+          <td class="mono">${i.odoo_template_id ? '<span style="color:var(--green)">'+i.odoo_template_id+'</span>' : '—'}</td>
+          <td class="mono">${i.odoo_bom_id ? '<span style="color:var(--green)">'+i.odoo_bom_id+'</span>' : '—'}</td>
+          <td style="font-size:11px;color:var(--text-muted)">${i.synced_at ? new Date(i.synced_at).toLocaleString() : ''}</td>
+          <td><button class="btn sm" onclick="resetItem('${i.guid}')">Reset</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ── Activity log
+    const logEl = document.getElementById('log-container');
+    if (logs.length === 0) {
+      logEl.innerHTML = '<div class="empty">No activity yet.</div>';
+    } else {
+      logEl.innerHTML = logs.map(l => `
+        <div class="log-entry">
+          <span class="log-ts">${esc(l.ts)}</span>
+          <span class="log-lv ${l.level}">${l.level}</span>
+          <span class="log-msg">${esc(l.message)}</span>
+        </div>
+      `).join('');
+    }
+
+  } catch(e) { console.error('Refresh error:', e); }
+}
+
+// ═══ Actions ═══════════════════════════════════════════
+
+async function triggerSync() {
+  document.getElementById('btn-sync').disabled = true;
+  document.getElementById('btn-sync').innerHTML = '<span class="spinner"></span> Starting…';
+  await api('/api/sync', {method:'POST'});
+  setTimeout(refresh, 1000);
+}
+
+async function toggleScheduler() {
+  const action = schedulerActive ? 'stop' : 'start';
+  await api('/api/scheduler', {method:'POST', body:JSON.stringify({action})});
+  setTimeout(refresh, 500);
+}
+
+async function testArena() {
+  const msg = document.getElementById('arena-test-msg');
+  const dot = document.getElementById('arena-dot');
+  msg.textContent = 'Saving & testing…';
+  msg.style.color = 'var(--text-dim)';
+  try {
+    await saveSettingsSilent();
+    const res = await api('/api/test/arena', {method:'POST'});
+    msg.textContent = res.message || res.error || 'Unknown response';
+    if (res.ok) { msg.style.color='var(--green)'; dot.className='conn-dot ok'; }
+    else { msg.style.color='var(--red)'; dot.className='conn-dot err'; }
+  } catch(e) {
+    msg.textContent = 'Request failed: ' + e.message;
+    msg.style.color = 'var(--red)';
+    dot.className = 'conn-dot err';
+  }
+}
+
+async function testOdoo() {
+  const msg = document.getElementById('odoo-test-msg');
+  const dot = document.getElementById('odoo-dot');
+  msg.textContent = 'Saving & testing…';
+  msg.style.color = 'var(--text-dim)';
+  try {
+    await saveSettingsSilent();
+    const res = await api('/api/test/odoo', {method:'POST'});
+    msg.textContent = res.message || res.error || 'Unknown response';
+    if (res.ok) { msg.style.color='var(--green)'; dot.className='conn-dot ok'; }
+    else { msg.style.color='var(--red)'; dot.className='conn-dot err'; }
+  } catch(e) {
+    msg.textContent = 'Request failed: ' + e.message;
+    msg.style.color = 'var(--red)';
+    dot.className = 'conn-dot err';
+  }
+}
+
+async function resetItem(guid) {
+  await api('/api/reset-item', {method:'POST', body:JSON.stringify({guid})});
+  refresh();
+}
+
+async function resetErrors() {
+  await api('/api/reset-errors', {method:'POST'});
+  refresh();
+}
+
+// ═══ Transfer workflow ══════════════════════════════════
+let fetchedItems = [];
+let currentFilter = 'all';
+let transferPolling = null;
+
+async function fetchArenaItems() {
+  const btn = document.getElementById('btn-fetch');
+  const container = document.getElementById('fetch-container');
+  const toolbar = document.getElementById('fetch-toolbar');
+  const resultsEl = document.getElementById('transfer-results');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Fetching…';
+  container.innerHTML = '';
+  toolbar.style.display = 'none';
+  resultsEl.style.display = 'none';
+
+  try {
+    const items = await api('/api/fetch-arena', {method:'POST'});
+    if (items.error) {
+      container.innerHTML = '<div class="card"><div class="card-body" style="color:var(--red)">'+esc(items.error)+'</div></div>';
+      return;
+    }
+    if (items.length === 0) {
+      container.innerHTML = '<div class="card"><div class="card-body empty">No items found with lifecycle phase "In Production" in Arena.</div></div>';
+      return;
+    }
+
+    fetchedItems = items;
+    currentFilter = 'all';
+
+    // Update missing components page
+    const totalMissing = items.reduce((s,i) => s + i.missing_components.length, 0);
+    if (totalMissing > 0) {
+      const allMissing = items.flatMap(i => i.missing_components.map(m => ({...m, parent_number:i.number, parent_name:i.name})));
+      lastMissingComponents = allMissing;
+      const mTbody = document.getElementById('missing-tbody');
+      mTbody.innerHTML = allMissing.map(m => `
+        <tr>
+          <td><span class="badge missing">NOT IN PRODUCTION</span> <strong>${esc(m.number)}</strong> — ${esc(m.name)}</td>
+          <td>${esc(m.parent_number)} — ${esc(m.parent_name)}</td>
+          <td class="mono">${m.qty}</td>
+        </tr>
+      `).join('');
+    }
+
+    renderFetchedItems();
+    toolbar.style.display = 'block';
+
+  } catch(e) {
+    container.innerHTML = '<div class="card"><div class="card-body" style="color:var(--red)">Error: '+esc(e.message)+'</div></div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Fetch from Arena';
+  }
+}
+
+function renderFetchedItems() {
+  const container = document.getElementById('fetch-container');
+  const filtered = currentFilter === 'all' ? fetchedItems :
+    fetchedItems.filter(i => i.odoo_status === currentFilter);
+
+  const newCount = fetchedItems.filter(i => i.odoo_status === 'new').length;
+  const existsCount = fetchedItems.filter(i => i.odoo_status === 'exists').length;
+
+  // Update filter button labels
+  document.getElementById('ft-all-n').textContent = '(' + fetchedItems.length + ')';
+  document.getElementById('ft-new-n').textContent = '(' + newCount + ')';
+  document.getElementById('ft-exists-n').textContent = '(' + existsCount + ')';
+
+  // Active tab style
+  ['all','new','exists'].forEach(f => {
+    const el = document.getElementById('ft-' + f);
+    el.className = f === currentFilter ? 'btn sm primary' : 'btn sm';
+  });
+
+  // Stats row
+  const totalBom = fetchedItems.filter(i => i.bom_count > 0).length;
+  const totalMissing = fetchedItems.reduce((s,i) => s + i.missing_components.length, 0);
+
+  container.innerHTML = `
+    <div class="stats" style="margin-bottom:16px">
+      <div class="stat"><div class="label">In Production</div><div class="val a">${fetchedItems.length}</div></div>
+      <div class="stat"><div class="label">New (not in Odoo)</div><div class="val g">${newCount}</div></div>
+      <div class="stat"><div class="label">Already in Odoo</div><div class="val">${existsCount}</div></div>
+      <div class="stat"><div class="label">With BOMs</div><div class="val">${totalBom}</div></div>
+      <div class="stat"><div class="label">Missing Components</div><div class="val ${totalMissing?'r':''}">${totalMissing}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-body flush">
+        <div class="scroll-table">
+        <table>
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" id="chk-all" onchange="toggleAll(this.checked)"></th>
+            <th>Odoo</th>
+            <th>Part #</th>
+            <th>Name</th>
+            <th>Rev</th>
+            <th>Category</th>
+            <th>Type</th>
+            <th>BOM</th>
+            <th>Issues</th>
+          </tr></thead>
+          <tbody>
+            ${filtered.map((i, idx) => {
+              const origIdx = fetchedItems.indexOf(i);
+              const statusBadge = i.odoo_status === 'new'
+                ? '<span class="badge pending">new</span>'
+                : i.odoo_status === 'exists'
+                ? '<span class="badge synced">exists</span>'
+                : '<span class="badge">' + esc(i.odoo_status) + '</span>';
+              return `<tr>
+                <td><input type="checkbox" class="item-chk" data-idx="${origIdx}" ${i._selected ? 'checked' : ''} onchange="onItemCheck(${origIdx}, this.checked)"></td>
+                <td>${statusBadge}</td>
+                <td class="mono"><strong>${esc(i.number)}</strong></td>
+                <td>${esc(i.name)}</td>
+                <td class="mono">${esc(i.revision)}</td>
+                <td style="color:var(--text-dim)">${esc(i.category)}</td>
+                <td>${i.assembly_type ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>'}</td>
+                <td>${i.bom_count > 0 ? '<span class="badge synced">' + i.bom_count + ' items</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td>${i.missing_components.length > 0
+                  ? '<span class="badge missing">'+i.missing_components.length+' missing</span>'
+                  : '<span style="color:var(--green);font-size:11px">OK</span>'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  updateSelectionCount();
+}
+
+function filterItems(f) {
+  currentFilter = f;
+  renderFetchedItems();
+}
+
+function onItemCheck(idx, checked) {
+  fetchedItems[idx]._selected = checked;
+  updateSelectionCount();
+}
+
+function toggleAll(checked) {
+  const visible = currentFilter === 'all' ? fetchedItems :
+    fetchedItems.filter(i => i.odoo_status === currentFilter);
+  visible.forEach(i => i._selected = checked);
+  renderFetchedItems();
+}
+
+function selectAllVisible() {
+  const visible = currentFilter === 'all' ? fetchedItems :
+    fetchedItems.filter(i => i.odoo_status === currentFilter);
+  visible.forEach(i => i._selected = true);
+  renderFetchedItems();
+}
+
+function selectNewOnly() {
+  fetchedItems.forEach(i => i._selected = (i.odoo_status === 'new'));
+  renderFetchedItems();
+}
+
+function deselectAll() {
+  fetchedItems.forEach(i => i._selected = false);
+  renderFetchedItems();
+}
+
+function updateSelectionCount() {
+  const visible = currentFilter === 'all' ? fetchedItems :
+    fetchedItems.filter(i => i.odoo_status === currentFilter);
+  const count = fetchedItems.filter(i => i._selected).length;
+  const allVisibleSelected = visible.length > 0 && visible.every(i => i._selected);
+  document.getElementById('sel-count').textContent = count + ' selected';
+  document.getElementById('btn-transfer').disabled = count === 0;
+  const chkAll = document.getElementById('chk-all');
+  if (chkAll) chkAll.checked = allVisibleSelected;
+}
+
+async function transferSelected() {
+  const selected = fetchedItems.filter(i => i._selected);
+  if (selected.length === 0) return;
+
+  if (!confirm(`Transfer ${selected.length} item(s) to Odoo?`)) return;
+
+  const btn = document.getElementById('btn-transfer');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting…';
+
+  const progressEl = document.getElementById('transfer-progress');
+  const resultsEl = document.getElementById('transfer-results');
+  progressEl.style.display = 'block';
+  resultsEl.style.display = 'none';
+
+  try {
+    await api('/api/transfer', {
+      method: 'POST',
+      body: JSON.stringify({ items: selected }),
+    });
+
+    // Poll progress
+    transferPolling = setInterval(async () => {
+      try {
+        const p = await api('/api/transfer/progress');
+        const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+        document.getElementById('tp-bar').style.width = pct + '%';
+        document.getElementById('tp-count').textContent = p.done + ' / ' + p.total;
+        document.getElementById('tp-current').textContent = p.current || '';
+        document.getElementById('tp-label').textContent = 'Transferring... ' + pct + '%';
+
+        if (!p.running && p.done > 0) {
+          clearInterval(transferPolling);
+          transferPolling = null;
+          progressEl.style.display = 'none';
+          showTransferResults(p.results);
+          btn.disabled = false;
+          btn.textContent = 'Transfer Selected';
+          // Update local items based on transfer results (no re-fetch needed)
+          for (const r of p.results) {
+            if (r.status === 'created' || r.status === 'skipped') {
+              const item = fetchedItems.find(i => i.number === r.number);
+              if (item) {
+                item.odoo_status = 'exists';
+                item.odoo_template_id = r.odoo_template_id;
+                item._selected = false;
+              }
+            }
+          }
+          renderFetchedItems();
+        }
+      } catch(e) { console.error('Poll error:', e); }
+    }, 800);
+
+  } catch(e) {
+    progressEl.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = 'Transfer Selected';
+    alert('Transfer failed: ' + e.message);
+  }
+}
+
+function showTransferResults(results) {
+  const el = document.getElementById('transfer-results');
+  const created = results.filter(r => r.status === 'created').length;
+  const skipped = results.filter(r => r.status === 'skipped').length;
+  const errors = results.filter(r => r.status === 'error');
+  const boms = results.filter(r => r.odoo_bom_id).length;
+
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <span>Transfer Complete</span>
+        <button class="btn sm" onclick="document.getElementById('transfer-results').style.display='none'">Dismiss</button>
+      </div>
+      <div class="card-body">
+        <div class="stats" style="margin-bottom:${errors.length ? '12' : '0'}px">
+          <div class="stat"><div class="label">Created</div><div class="val g">${created}</div></div>
+          <div class="stat"><div class="label">Skipped (exist)</div><div class="val">${skipped}</div></div>
+          <div class="stat"><div class="label">BOMs Created</div><div class="val">${boms}</div></div>
+          <div class="stat"><div class="label">Errors</div><div class="val r">${errors.length}</div></div>
+        </div>
+        ${errors.length ? '<div style="padding:10px 14px;background:var(--red-dim);border-radius:6px;font-size:12px;color:var(--red)">' +
+          errors.map(e => '<div><strong>' + esc(e.number) + '</strong>: ' + esc(e.error) + '</div>').join('') + '</div>' : ''}
+      </div>
+    </div>
+  `;
+}
+
+// ═══ Settings ══════════════════════════════════════════
+
+async function loadSettings() {
+  const cfg = await api('/api/config');
+  document.getElementById('cfg-arena-url').value = cfg.arena?.api_url || '';
+  document.getElementById('cfg-arena-email').value = cfg.arena?.email || '';
+  document.getElementById('cfg-arena-workspace').value = cfg.arena?.workspace_id || '';
+  document.getElementById('arena-pw-hint').textContent = cfg.arena?.password_set ? 'Password is set. Leave blank to keep.' : 'No password set.';
+
+  document.getElementById('cfg-odoo-url').value = cfg.odoo?.url || '';
+  document.getElementById('cfg-odoo-db').value = cfg.odoo?.db || '';
+  document.getElementById('cfg-odoo-user').value = cfg.odoo?.user || '';
+  document.getElementById('odoo-pw-hint').textContent = cfg.odoo?.password_set ? 'Password is set. Leave blank to keep.' : 'No password set.';
+
+  document.getElementById('cfg-sync-interval').value = cfg.sync?.interval_minutes || 15;
+  document.getElementById('cfg-default-cat').value = cfg.mapping?.default_category_id || 1;
+  document.getElementById('cfg-default-uom').value = cfg.mapping?.default_uom_id || 1;
+}
+
+async function testCreateProduct(keep) {
+  const msg = document.getElementById('test-product-msg');
+  const name = document.getElementById('test-product-name').value.trim();
+  const code = document.getElementById('test-product-code').value.trim();
+  msg.textContent = keep ? 'Creating product in Odoo…' : 'Creating & deleting test product…';
+  msg.style.color = 'var(--text-dim)';
+  try {
+    await saveSettingsSilent();
+    const res = await api('/api/test/create-product', {
+      method: 'POST',
+      body: JSON.stringify({ name, code, keep }),
+    });
+    msg.textContent = res.message || res.error || 'Unknown response';
+    msg.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  } catch(e) {
+    msg.textContent = 'Request failed: ' + e.message;
+    msg.style.color = 'var(--red)';
+  }
+}
+
+function collectSettingsPayload() {
+  return {
+    arena: {
+      api_url: document.getElementById('cfg-arena-url').value.trim(),
+      email: document.getElementById('cfg-arena-email').value.trim(),
+      password: document.getElementById('cfg-arena-password').value,
+      workspace_id: document.getElementById('cfg-arena-workspace').value.trim(),
+    },
+    odoo: {
+      url: document.getElementById('cfg-odoo-url').value.trim(),
+      db: document.getElementById('cfg-odoo-db').value.trim(),
+      user: document.getElementById('cfg-odoo-user').value.trim(),
+      password: document.getElementById('cfg-odoo-password').value,
+    },
+    sync: {
+      interval_minutes: parseInt(document.getElementById('cfg-sync-interval').value) || 15,
+    },
+    mapping: {
+      default_category_id: parseInt(document.getElementById('cfg-default-cat').value) || 1,
+      default_uom_id: parseInt(document.getElementById('cfg-default-uom').value) || 1,
+    },
+  };
+}
+
+async function saveSettingsSilent() {
+  const payload = collectSettingsPayload();
+  await api('/api/config', {method:'PUT', body:JSON.stringify(payload)});
+}
+
+async function saveSettings() {
+  const msg = document.getElementById('save-msg');
+  try {
+    await saveSettingsSilent();
+    msg.style.color = 'var(--green)';
+    msg.textContent = 'Settings saved.';
+    document.getElementById('cfg-arena-password').value = '';
+    document.getElementById('cfg-odoo-password').value = '';
+    loadSettings();
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Save failed: ' + e.message;
+  }
+  setTimeout(() => { msg.textContent = ''; }, 4000);
+}
+
+// ═══ Init ══════════════════════════════════════════════
+loadSettings();
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

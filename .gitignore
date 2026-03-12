@@ -1,0 +1,22 @@
+# Credentials and runtime state
+config.json
+sync_state.json
+*.log
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Temporary/debug
+verify_matching.py
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
