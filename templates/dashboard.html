@@ -688,36 +688,37 @@
         </div>
       </div>
 
-      <!-- Default Mappings -->
+      <!-- Category & UoM Mapping -->
       <div class="card">
         <div class="card-head">
-          <span>Default Product Mappings</span>
+          <span>Category & UoM Mapping</span>
           <button class="btn sm" onclick="loadOdooDropdowns()" id="btn-load-mappings">Load from Odoo</button>
         </div>
         <div class="card-body">
           <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
-            When a product is transferred, it needs a category and unit of measure in Odoo.
-            These defaults are used when no specific mapping exists for the Arena category.
-            Click "Load from Odoo" to populate the dropdowns.
+            Categories and UoMs are <strong>auto-matched by name</strong> at sync/transfer time.
+            For example, Arena category "Battery" automatically maps to Odoo "Hardware / Electrical / Battery".
+            The fallbacks below are only used when no name match is found.
           </p>
           <div class="form-row">
             <div class="form-group">
-              <label>Default Product Category</label>
+              <label>Fallback Product Category</label>
               <select id="cfg-default-cat">
                 <option value="">-- Click "Load from Odoo" --</option>
               </select>
-              <div class="form-hint">Fallback category for products without a specific mapping</div>
+              <div class="form-hint">Used when Arena category has no name match in Odoo</div>
             </div>
             <div class="form-group">
-              <label>Default Unit of Measure</label>
+              <label>Fallback Unit of Measure</label>
               <select id="cfg-default-uom">
                 <option value="">-- Click "Load from Odoo" --</option>
               </select>
-              <div class="form-hint">Fallback UoM (usually "Units")</div>
+              <div class="form-hint">Used when Arena UoM has no name match in Odoo</div>
             </div>
           </div>
         </div>
       </div>
+
 
       <button class="btn primary" onclick="saveSettings()" style="margin-top:4px;">Save All Settings</button>
       <span id="save-msg" style="margin-left:12px;font-size:12px;"></span>
@@ -908,22 +909,24 @@ async function refresh() {
         const typeBadge = isAsm ? '<span class="badge assembly">'+esc(i.assembly_type)+'</span>' : '<span class="badge component">Part</span>';
         const parents = i.used_in || [];
         const comps = i.bom_components || [];
-
-        // If bom_components is empty, build from bom_component_numbers (old state entries)
-        if (comps.length === 0 && i.bom_component_numbers && i.bom_component_numbers.length > 0) {
-          for (const cn of i.bom_component_numbers) {
-            comps.push({number: cn, name: '', qty: ''});
-          }
-        }
+        const missing = i.missing_components || [];
 
         let usedInCell = '';
         if (isAsm && comps.length > 0) {
           usedInCell = `<span class="bom-toggle" onclick="toggleBom('ibom-${idx}', this)">` +
-            `<span class="arrow">&#9654;</span> ${comps.length} components</span>`;
+            `<span class="arrow">&#9654;</span> ${comps.length} components` +
+            (missing.length > 0 ? ` <span class="badge missing" style="margin-left:4px">${missing.length} missing</span>` : '') +
+            `</span>`;
         } else if (isAsm && i.bom_component_count) {
           usedInCell = '<span style="color:var(--accent);font-size:11px">' + i.bom_component_count + ' components</span>';
         } else if (parents.length > 0) {
-          usedInCell = '<div class="used-in-tags">' + parents.map(p => '<span class="used-in-tag">'+esc(p)+'</span>').join('') + '</div>';
+          usedInCell = '<div class="used-in-tags">' + parents.map(p => {
+            if (p.in_odoo) {
+              return `<span class="used-in-tag" title="${esc(p.name)} (in Odoo)">${esc(p.number)}</span>`;
+            } else {
+              return `<span class="used-in-tag" style="background:var(--orange-dim);color:var(--orange)" title="${esc(p.name)} (NOT in Odoo!)">${esc(p.number)} !</span>`;
+            }
+          }).join('') + '</div>';
         } else {
           usedInCell = '<span style="color:var(--text-muted)">--</span>';
         }
@@ -942,7 +945,7 @@ async function refresh() {
           <td><button class="btn sm" onclick="resetItem('${i.guid}')">Reset</button></td>
         </tr>`;
 
-        // Expandable BOM sub-rows for assemblies
+        // Expandable BOM sub-rows for assemblies (matches fetch-arena detail level)
         if (isAsm && comps.length > 0) {
           rows += `<tr class="bom-sub-row" id="ibom-${idx}" style="display:none">
             <td colspan="11">
@@ -951,12 +954,24 @@ async function refresh() {
                   <td class="comp-indent" style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Component</td>
                   <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase">Name</td>
                   <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;width:60px">Qty</td>
+                  <td style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;width:90px">Status</td>
                 </tr>
-                ${comps.map(c => `<tr>
+                ${comps.map(c => {
+                  let cStatus;
+                  if (c.in_odoo) {
+                    cStatus = '<span style="color:var(--green);font-size:10px">In Odoo</span>';
+                  } else if (c.in_synced) {
+                    cStatus = '<span style="color:var(--orange);font-size:10px">Synced (no Odoo ID)</span>';
+                  } else {
+                    cStatus = '<span class="badge missing">Not synced</span>';
+                  }
+                  return `<tr>
                   <td class="comp-indent mono">${esc(c.number)}</td>
                   <td>${esc(c.name)}</td>
                   <td class="mono">${c.qty}</td>
-                </tr>`).join('')}
+                  <td>${cStatus}</td>
+                </tr>`;
+                }).join('')}
               </table>
             </td>
           </tr>`;
@@ -1169,6 +1184,7 @@ function renderFetchedItems() {
 
               const isAssembly = i.assembly_type && i.assembly_type !== 'NOT_AN_ASSEMBLY';
               const parents = i.used_in_assemblies || [];
+              const iMissing = i.missing_components || [];
 
               // "Used In / BOM" column content
               let bomCell = '';
@@ -1176,7 +1192,7 @@ function renderFetchedItems() {
                 // Assembly: show expandable BOM toggle
                 bomCell = `<span class="bom-toggle" onclick="toggleBom('bom-${origIdx}', this)">` +
                   `<span class="arrow">&#9654;</span> ${i.bom_count} components` +
-                  (i.missing_components.length > 0 ? ` <span class="badge missing" style="margin-left:4px">${i.missing_components.length} missing</span>` : '') +
+                  (iMissing.length > 0 ? ` <span class="badge missing" style="margin-left:4px">${iMissing.length} missing</span>` : '') +
                   `</span>`;
               } else if (parents.length > 0) {
                 // Component used in assemblies: show parent tags with Odoo status
@@ -1393,7 +1409,9 @@ function showTransferResults(results) {
   const created = results.filter(r => r.status === 'created').length;
   const skipped = results.filter(r => r.status === 'skipped').length;
   const errors = results.filter(r => r.status === 'error');
+  const bomErrors = results.filter(r => r.error && r.error.includes('BOM error'));
   const boms = results.filter(r => r.odoo_bom_id).length;
+  const hasBomPermError = results.some(r => r.error && r.error.includes('not allowed'));
 
   el.style.display = 'block';
   el.innerHTML = `
@@ -1403,12 +1421,13 @@ function showTransferResults(results) {
         <button class="btn sm" onclick="document.getElementById('transfer-results').style.display='none'">Dismiss</button>
       </div>
       <div class="card-body">
-        <div class="stats" style="margin-bottom:${errors.length ? '12' : '0'}px">
+        <div class="stats" style="margin-bottom:12px">
           <div class="stat"><div class="label">Created</div><div class="val g">${created}</div></div>
           <div class="stat"><div class="label">Skipped (exist)</div><div class="val">${skipped}</div></div>
           <div class="stat"><div class="label">BOMs Created</div><div class="val">${boms}</div></div>
-          <div class="stat"><div class="label">Errors</div><div class="val r">${errors.length}</div></div>
+          <div class="stat"><div class="label">Errors</div><div class="val r">${errors.length + bomErrors.length}</div></div>
         </div>
+        ${hasBomPermError ? '<div style="padding:10px 14px;background:var(--orange-dim);border-radius:6px;font-size:12px;color:var(--orange);margin-bottom:8px"><strong>BOM Permission Error:</strong> Your Odoo user does not have the <strong>Manufacturing / Administrator</strong> role. Products were created but BOMs could not be written. Grant the role in Odoo Settings &gt; Users and retry.</div>' : ''}
         ${errors.length ? '<div style="padding:10px 14px;background:var(--red-dim);border-radius:6px;font-size:12px;color:var(--red)">' +
           errors.map(e => '<div><strong>' + esc(e.number) + '</strong>: ' + esc(e.error) + '</div>').join('') + '</div>' : ''}
       </div>
@@ -1433,7 +1452,7 @@ async function loadSettings() {
   document.getElementById('cfg-sync-interval').value = cfg.sync?.interval_minutes || 15;
 
   // Store current values to set after dropdowns load
-  window._pendingCatId = cfg.mapping?.default_category_id || 17;
+  window._pendingCatId = cfg.mapping?.default_category_id || 1;
   window._pendingUomId = cfg.mapping?.default_uom_id || 1;
 
   // Set select values (works if options already loaded)
@@ -1459,7 +1478,7 @@ async function loadOdooDropdowns() {
     ]);
 
     if (categories && !categories.error) {
-      const currentCat = window._pendingCatId || parseInt(catSelect.value) || 17;
+      const currentCat = window._pendingCatId || parseInt(catSelect.value) || 1;
       catSelect.innerHTML = categories
         .sort((a, b) => (a.complete_name || a.name).localeCompare(b.complete_name || b.name))
         .map(c => `<option value="${c.id}" ${c.id === currentCat ? 'selected' : ''}>${esc(c.complete_name || c.name)} (id=${c.id})</option>`)

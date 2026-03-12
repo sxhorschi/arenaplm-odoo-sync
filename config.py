@@ -30,10 +30,10 @@ DEFAULT_CONFIG = {
         "auto_sync": False,
     },
     "mapping": {
-        "categories": {},   # Arena category name → Odoo categ_id
-        "uom": {},          # Arena UoM name → Odoo uom.uom ID
-        "default_category_id": 17,  # "Hardware" — override in Settings if different
-        "default_uom_id": 1,
+        "categories": {},   # Arena category name → Odoo categ_id (manual overrides; auto-match used first)
+        "uom": {},          # Arena UoM name → Odoo uom.uom ID (manual overrides; auto-match used first)
+        "default_category_id": 1,   # Fallback Odoo category if no match found (1 = "All")
+        "default_uom_id": 1,        # Fallback UoM if no match found (1 = "Units")
     },
 }
 

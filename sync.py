@@ -20,7 +20,7 @@ from pathlib import Path
 
 from arena_client import ArenaClient
 from odoo_client import OdooClient
-from mapping import map_arena_item_to_odoo_product, map_bom_line
+from mapping import map_arena_item_to_odoo_product, map_bom_line, build_auto_maps
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,10 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
         logger.info("SYNC STARTED at %s", result["started_at"])
         logger.info("=" * 60)
 
-        items = arena.get_items(lifecycle_phase="In Production")
+        # Build auto-match maps from Odoo categories and UoMs
+        build_auto_maps(odoo)
+
+        items = arena.get_items(lifecycle_phase="In Production") or []
         result["items_fetched"] = len(items)
         logger.info("Fetched %d items from Arena", len(items))
 
@@ -347,6 +350,79 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
 
             result["items_processed"].append(item_detail)
             save_state(state)  # Save after each item for crash resilience
+
+        # ── 6. BOM reconciliation pass ────────────────────────────────
+        # After all products are created/updated, reconcile ALL assembly
+        # BOMs.  This ensures that:
+        #   a) Newly synced components get added to parent BOMs that
+        #      were skipped-as-unchanged earlier.
+        #   b) Assemblies whose hash didn't change but whose BOM was
+        #      incomplete (missing components) get filled in.
+        logger.info("Starting BOM reconciliation pass …")
+        code_map = odoo.find_all_products_with_codes()  # refresh
+        boms_reconciled = 0
+
+        item_by_guid = {i["guid"]: i for i in items}
+        for parent_guid, bom_lines in bom_map.items():
+            parent_item = item_by_guid.get(parent_guid)
+            if not parent_item:
+                continue
+            parent_number = parent_item.get("number", "")
+            parent_tmpl = code_map.get(parent_number)
+            if not parent_tmpl:
+                continue  # assembly not in Odoo
+
+            # Build desired BOM lines
+            desired_lines = []
+            for line in bom_lines:
+                comp_info = line.get("item") or {}
+                comp_number = comp_info.get("number", "")
+                comp_tmpl = code_map.get(comp_number)
+                if not comp_tmpl:
+                    continue
+                comp_variant = odoo.get_product_variant_id(comp_tmpl)
+                if not comp_variant:
+                    continue
+                desired_lines.append((comp_variant,
+                    map_bom_line(comp_variant, line.get("quantity", 1),
+                                 comp_info.get("uom", ""), mapping_config)))
+
+            if not desired_lines:
+                continue
+
+            existing_bom_id = odoo.find_bom_by_product(parent_tmpl)
+            try:
+                if not existing_bom_id:
+                    bom_id = odoo.create_bom(parent_tmpl, [lv for _, lv in desired_lines])
+                    result["boms_created"] += 1
+                    boms_reconciled += 1
+                    # Update state
+                    if parent_guid in state["items"]:
+                        state["items"][parent_guid]["odoo_bom_id"] = bom_id
+                        save_state(state)
+                    logger.info("Reconcile: created BOM id=%d for %s (%d lines)",
+                                bom_id, parent_number, len(desired_lines))
+                else:
+                    existing_lines = odoo.get_bom_lines(existing_bom_id)
+                    existing_product_ids = {
+                        (ln["product_id"][0] if isinstance(ln["product_id"], (list, tuple)) else ln["product_id"])
+                        for ln in existing_lines if ln.get("product_id")
+                    }
+                    new_lines = [lv for vid, lv in desired_lines if vid not in existing_product_ids]
+                    if new_lines:
+                        odoo.update_bom_add_lines(existing_bom_id, new_lines)
+                        boms_reconciled += 1
+                        logger.info("Reconcile: updated BOM id=%d for %s (+%d lines)",
+                                    existing_bom_id, parent_number, len(new_lines))
+                    # Ensure state has the BOM id
+                    if parent_guid in state["items"] and not state["items"][parent_guid].get("odoo_bom_id"):
+                        state["items"][parent_guid]["odoo_bom_id"] = existing_bom_id
+                        save_state(state)
+            except Exception as e:
+                logger.error("BOM reconcile failed for %s: %s", parent_number, e, exc_info=True)
+
+        if boms_reconciled:
+            logger.info("BOM reconciliation: %d assemblies updated", boms_reconciled)
 
     except Exception as e:
         logger.error("Sync failed globally: %s", e, exc_info=True)

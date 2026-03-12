@@ -170,17 +170,62 @@ def api_status():
 @app.route("/api/items")
 def api_items():
     state = load_state()
+    all_items = state.get("items", {})
 
-    # Build reverse map server-side: component number -> list of parent assembly numbers
-    comp_to_parents: dict[str, list[str]] = {}
-    for guid, d in state.get("items", {}).items():
+    # Lookup sets for enrichment
+    synced_numbers = {d.get("number", "") for d in all_items.values()}
+    number_to_odoo = {
+        d.get("number", ""): {
+            "odoo_template_id": d.get("odoo_template_id"),
+            "odoo_bom_id": d.get("odoo_bom_id"),
+        }
+        for d in all_items.values()
+    }
+
+    # Build reverse map: component number -> list of parent assembly info
+    # (matches the used_in_assemblies structure from fetch-arena)
+    comp_to_parents: dict[str, list[dict]] = {}
+    for guid, d in all_items.items():
+        parent_number = d.get("number", "")
+        parent_name = d.get("name", "")
+        parent_in_odoo = bool(d.get("odoo_template_id"))
         for cn in d.get("bom_component_numbers", []):
             if cn not in comp_to_parents:
                 comp_to_parents[cn] = []
-            comp_to_parents[cn].append(d.get("number", ""))
+            comp_to_parents[cn].append({
+                "number": parent_number,
+                "name": parent_name,
+                "in_odoo": parent_in_odoo,
+            })
 
     items = []
-    for guid, d in state.get("items", {}).items():
+    for guid, d in all_items.items():
+        # Enrich BOM components with synced/odoo status
+        raw_comps = d.get("bom_components", [])
+        # Fallback to bom_component_numbers for old state entries
+        if not raw_comps and d.get("bom_component_numbers"):
+            raw_comps = [{"number": cn, "name": "", "qty": ""} for cn in d["bom_component_numbers"]]
+
+        enriched_comps = []
+        missing_components = []
+        for c in raw_comps:
+            cn = c.get("number", "")
+            in_synced = cn in synced_numbers
+            comp_odoo = number_to_odoo.get(cn, {})
+            enriched_comps.append({
+                "number": cn,
+                "name": c.get("name", ""),
+                "qty": c.get("qty", ""),
+                "in_synced": in_synced,
+                "in_odoo": bool(comp_odoo.get("odoo_template_id")),
+            })
+            if not in_synced:
+                missing_components.append({
+                    "number": cn,
+                    "name": c.get("name", ""),
+                    "qty": c.get("qty", ""),
+                })
+
         items.append({
             "guid": guid,
             "number": d.get("number", ""),
@@ -190,7 +235,8 @@ def api_items():
             "assembly_type": d.get("assembly_type", ""),
             "bom_component_count": d.get("bom_component_count", 0),
             "bom_component_numbers": d.get("bom_component_numbers", []),
-            "bom_components": d.get("bom_components", []),
+            "bom_components": enriched_comps,
+            "missing_components": missing_components,
             "used_in": comp_to_parents.get(d.get("number", ""), []),
             "status": d.get("status", "PENDING"),
             "error": d.get("error"),
@@ -372,7 +418,10 @@ def api_transfer():
             if "items" not in state:
                 state["items"] = {}
 
-            from mapping import map_arena_item_to_odoo_product, map_bom_line
+            from mapping import map_arena_item_to_odoo_product, map_bom_line, build_auto_maps
+
+            # Build auto-match maps from Odoo categories and UoMs
+            build_auto_maps(odoo)
 
             # Sort: components (NOT_AN_ASSEMBLY) first, then sub-assemblies, then top-level
             # This ensures components exist in Odoo before assemblies try to reference them in BOMs
@@ -445,13 +494,15 @@ def api_transfer():
                 transfer_progress["results"].append(entry)
                 transfer_progress["done"] += 1
 
-            # Phase 2: Reconcile ALL assembly BOMs (create new + update existing)
+            # Phase 2: Reconcile ALL assembly BOMs
             #
-            # For each assembly in Arena that exists in Odoo:
-            #   - No BOM yet → create with all available components
-            #   - BOM exists → check for missing lines and add them
-            # This ensures that transferring new components updates all
-            # related BOMs, not just assemblies without BOMs.
+            # For EVERY assembly in Arena that references components in Odoo:
+            #   - Assembly NOT in Odoo yet → auto-create the assembly product,
+            #     then create its BOM. This is critical: transferring a
+            #     component MUST pull in its parent assemblies so the BOM
+            #     relationship is preserved in Odoo.
+            #   - Assembly in Odoo, no BOM → create BOM
+            #   - Assembly in Odoo, BOM exists → add missing lines
             transfer_progress["phase"] = "boms"
             transfer_progress["current"] = "Fetching Arena assemblies for BOM reconciliation..."
             try:
@@ -464,20 +515,138 @@ def api_transfer():
                 # Refresh code_map to include newly created products
                 code_map = odoo.find_all_products_with_codes()
 
+                # Collect the part numbers we just transferred so we know
+                # which assemblies are relevant (reference at least one
+                # transferred component)
+                transferred_numbers = {item.get("number", "") for item in sorted_items}
+
                 boms_created = 0
                 boms_updated = 0
+                bom_errors = 0
+                first_bom_error = None
+                assemblies_auto_created = 0
                 for asm in assemblies:
                     asm_number = asm.get("number", "")
-                    asm_tmpl = code_map.get(asm_number)
-                    if not asm_tmpl:
-                        continue  # Assembly not in Odoo yet
+                    asm_guid = asm.get("guid", "")
 
                     # Fetch BOM lines from Arena
-                    bom_lines = arena.get_bom_for_item(asm["guid"])
+                    bom_lines = arena.get_bom_for_item(asm_guid)
                     if not bom_lines:
                         continue
 
-                    # Build desired BOM lines from Arena data
+                    # Check if this assembly references ANY component that
+                    # is in Odoo (either just transferred or already there)
+                    has_odoo_component = False
+                    references_transferred = False
+                    for line in bom_lines:
+                        comp_number = (line.get("item") or {}).get("number", "")
+                        if code_map.get(comp_number):
+                            has_odoo_component = True
+                        if comp_number in transferred_numbers:
+                            references_transferred = True
+
+                    if not has_odoo_component:
+                        continue  # No components in Odoo at all — skip
+
+                    # ── Ensure assembly product exists in Odoo ──
+                    asm_tmpl = code_map.get(asm_number)
+                    if not asm_tmpl and references_transferred:
+                        # Assembly is NOT in Odoo but references a component
+                        # we just transferred — auto-create the assembly
+                        transfer_progress["current"] = f"Auto-creating assembly {asm_number}..."
+                        try:
+                            asm_vals = map_arena_item_to_odoo_product(
+                                {
+                                    "number": asm_number,
+                                    "name": asm.get("name", ""),
+                                    "revisionNumber": asm.get("revisionNumber", ""),
+                                    "category": asm.get("category"),
+                                    "assemblyType": asm.get("assemblyType", ""),
+                                    "description": asm.get("description", ""),
+                                },
+                                mapping_cfg,
+                            )
+                            asm_tmpl = odoo.create_product(asm_vals)
+                            asm_variant = odoo.get_product_variant_id(asm_tmpl)
+                            code_map[asm_number] = asm_tmpl
+                            assemblies_auto_created += 1
+
+                            # Store BOM component info for the assembly
+                            asm_bom_comp_numbers = []
+                            asm_bom_components = []
+                            for bl in bom_lines:
+                                ci = bl.get("item") or {}
+                                cn = ci.get("number", "")
+                                if cn:
+                                    asm_bom_comp_numbers.append(cn)
+                                    asm_bom_components.append({
+                                        "number": cn,
+                                        "name": ci.get("name", ""),
+                                        "qty": bl.get("quantity", 0),
+                                    })
+
+                            state["items"][asm_guid] = {
+                                "number": asm_number,
+                                "name": asm.get("name", ""),
+                                "revision": asm.get("revisionNumber", ""),
+                                "category": (asm.get("category") or {}).get("name", ""),
+                                "assembly_type": asm.get("assemblyType", ""),
+                                "bom_component_count": len(bom_lines),
+                                "bom_component_numbers": asm_bom_comp_numbers,
+                                "bom_components": asm_bom_components,
+                                "hash": "",
+                                "status": "SYNCED",
+                                "error": None,
+                                "odoo_template_id": asm_tmpl,
+                                "odoo_variant_id": asm_variant,
+                                "odoo_bom_id": None,
+                                "synced_at": datetime.now().isoformat(),
+                            }
+                            save_state(state)
+                            log_activity("INFO", f"Auto-created assembly {asm_number} in Odoo (template={asm_tmpl})")
+                        except Exception as e:
+                            logger.error("Auto-create assembly %s failed: %s", asm_number, e, exc_info=True)
+                            log_activity("WARN", f"Could not auto-create assembly {asm_number}: {e}")
+                            continue
+                    elif not asm_tmpl:
+                        continue  # Not in Odoo and doesn't reference transferred items
+
+                    # ── Always store BOM relationship in sync_state ──
+                    # This makes "Used In" work even if Odoo BOM write fails
+                    asm_bom_comp_numbers = []
+                    asm_bom_components = []
+                    for bl in bom_lines:
+                        ci = bl.get("item") or {}
+                        cn = ci.get("number", "")
+                        if cn:
+                            asm_bom_comp_numbers.append(cn)
+                            asm_bom_components.append({
+                                "number": cn,
+                                "name": ci.get("name", ""),
+                                "qty": bl.get("quantity", 0),
+                            })
+
+                    existing_state = state["items"].get(asm_guid, {})
+                    state["items"][asm_guid] = {
+                        "number": asm_number,
+                        "name": asm.get("name", ""),
+                        "revision": existing_state.get("revision", asm.get("revisionNumber", "")),
+                        "category": existing_state.get("category", (asm.get("category") or {}).get("name", "")),
+                        "assembly_type": asm.get("assemblyType", ""),
+                        "bom_component_count": len(bom_lines),
+                        "bom_component_numbers": asm_bom_comp_numbers,
+                        "bom_components": asm_bom_components,
+                        "hash": existing_state.get("hash", ""),
+                        "status": existing_state.get("status", "SYNCED"),
+                        "error": existing_state.get("error"),
+                        "odoo_template_id": asm_tmpl or existing_state.get("odoo_template_id"),
+                        "odoo_variant_id": existing_state.get("odoo_variant_id"),
+                        "odoo_bom_id": existing_state.get("odoo_bom_id"),
+                        "synced_at": existing_state.get("synced_at", datetime.now().isoformat()),
+                    }
+                    save_state(state)
+
+                    # ── Build desired BOM lines for Odoo ──
                     desired_lines = []  # [(comp_variant_id, line_vals)]
                     skipped_comps = []
                     for line in bom_lines:
@@ -502,7 +671,7 @@ def api_transfer():
                     if not desired_lines:
                         continue
 
-                    existing_bom_id = odoo.find_bom_by_product(asm_tmpl)
+                    existing_bom_id = odoo.find_bom_by_product(asm_tmpl) if asm_tmpl else None
 
                     try:
                         if not existing_bom_id:
@@ -511,14 +680,11 @@ def api_transfer():
                             bom_id = odoo.create_bom(asm_tmpl, [lv for _, lv in desired_lines])
                             boms_created += 1
 
+                            state["items"][asm_guid]["odoo_bom_id"] = bom_id
+                            save_state(state)
                             for r in transfer_progress["results"]:
                                 if r["number"] == asm_number:
                                     r["odoo_bom_id"] = bom_id
-                                    break
-                            for guid, sdata in state.get("items", {}).items():
-                                if sdata.get("number") == asm_number:
-                                    sdata["odoo_bom_id"] = bom_id
-                                    save_state(state)
                                     break
                         else:
                             # BOM exists — check for missing lines and add them
@@ -535,16 +701,26 @@ def api_transfer():
 
                     except Exception as e:
                         logger.error("BOM failed for %s: %s", asm_number, e, exc_info=True)
+                        bom_errors += 1
+                        if not first_bom_error:
+                            first_bom_error = str(e)
                         for r in transfer_progress["results"]:
                             if r["number"] == asm_number:
                                 r["error"] = (r.get("error") or "") + f" BOM error: {e}"
                                 break
 
-                log_activity("INFO", f"BOM reconciliation: {boms_created} created, {boms_updated} updated")
+                msg = f"BOM reconciliation: {boms_created} created, {boms_updated} updated"
+                if assemblies_auto_created:
+                    msg += f", {assemblies_auto_created} parent assemblies auto-created"
+                if bom_errors:
+                    msg += f", {bom_errors} FAILED"
+                log_activity("OK" if bom_errors == 0 else "ERROR", msg)
+                if first_bom_error:
+                    log_activity("ERROR", f"BOM permission error — your Odoo user needs the 'Manufacturing / Administrator' role. Detail: {first_bom_error}")
 
             except Exception as e:
                 logger.error("BOM reconciliation failed: %s", e, exc_info=True)
-                log_activity("WARN", f"BOM reconciliation error: {e}")
+                log_activity("ERROR", f"BOM reconciliation failed: {e}")
 
             created = sum(1 for r in transfer_progress["results"] if r["status"] == "created")
             skipped = sum(1 for r in transfer_progress["results"] if r["status"] == "skipped")
@@ -849,6 +1025,64 @@ def api_odoo_categories():
         client = build_odoo(config)
         client.authenticate()
         return jsonify(client.get_product_categories())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/category-preview")
+def api_category_preview():
+    """Preview how Arena categories will auto-match to Odoo categories."""
+    try:
+        config = load_config()
+        arena = build_arena(config)
+        arena.authenticate()
+        odoo = build_odoo(config)
+        odoo.authenticate()
+
+        # Get Arena categories from items
+        items = arena.get_items(lifecycle_phase="In Production")
+        arena_categories = sorted({
+            (item.get("category") or {}).get("name", "")
+            for item in items if (item.get("category") or {}).get("name")
+        })
+
+        # Get Odoo categories
+        odoo_cats = odoo.get_product_categories()
+        # Build name→id maps
+        by_name = {}
+        for cat in odoo_cats:
+            by_name[cat.get("name", "")] = {"id": cat["id"], "complete_name": cat.get("complete_name", "")}
+            complete = cat.get("complete_name", "")
+            if " / " in complete:
+                leaf = complete.rsplit(" / ", 1)[-1]
+                if leaf not in by_name:
+                    by_name[leaf] = {"id": cat["id"], "complete_name": complete}
+
+        manual_map = config.get("mapping", {}).get("categories", {})
+        default_id = config.get("mapping", {}).get("default_category_id", 1)
+
+        result = []
+        for arena_cat in arena_categories:
+            match_info = {"arena_category": arena_cat, "method": None, "odoo_id": None, "odoo_name": None}
+
+            if arena_cat in manual_map:
+                match_info["method"] = "manual"
+                match_info["odoo_id"] = manual_map[arena_cat]
+                odoo_match = next((c for c in odoo_cats if c["id"] == manual_map[arena_cat]), None)
+                match_info["odoo_name"] = odoo_match.get("complete_name", "") if odoo_match else "?"
+            elif arena_cat in by_name:
+                match_info["method"] = "auto"
+                match_info["odoo_id"] = by_name[arena_cat]["id"]
+                match_info["odoo_name"] = by_name[arena_cat]["complete_name"]
+            else:
+                match_info["method"] = "default"
+                match_info["odoo_id"] = default_id
+                odoo_match = next((c for c in odoo_cats if c["id"] == default_id), None)
+                match_info["odoo_name"] = odoo_match.get("complete_name", "") if odoo_match else "?"
+
+            result.append(match_info)
+
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
