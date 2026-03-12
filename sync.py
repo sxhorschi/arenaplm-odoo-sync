@@ -6,7 +6,7 @@ State is tracked per item in sync_state.json with statuses:
   PENDING → PRODUCT_CREATED → SYNCED | ERROR
 
 Key behaviors:
-  - Idempotent: uses ARENA-{partNumber} as Odoo default_code to prevent dupes
+  - Idempotent: uses Arena part number as Odoo default_code to prevent dupes
   - Dependency-aware: topological sort ensures components exist before assemblies
   - Per-record error isolation: one failure doesn't block the rest
   - Change detection: SHA-256 hash skips unchanged items
@@ -132,13 +132,15 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
         # Build a lookup of all in-production GUIDs for dependency checks
         in_production_guids = {item["guid"] for item in items}
 
-        # ── 2. Fetch BOMs for all items ──────────────────────────────
+        # ── 2. Fetch BOMs for assemblies only ─────────────────────────
         bom_map: dict[str, list[dict]] = {}
         for item in items:
-            guid = item["guid"]
-            bom_lines = arena.get_bom_for_item(guid)
-            if bom_lines:
-                bom_map[guid] = bom_lines
+            assembly_type = item.get("assemblyType", "")
+            if assembly_type and assembly_type != "NOT_AN_ASSEMBLY":
+                guid = item["guid"]
+                bom_lines = arena.get_bom_for_item(guid)
+                if bom_lines:
+                    bom_map[guid] = bom_lines
 
                 # Track missing components (in BOM but not "In Production")
                 for line in bom_lines:
@@ -170,7 +172,11 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
         # ── 3. Sort: components first, then assemblies ───────────────
         ordered_items = resolve_creation_order(items, bom_map)
 
-        # ── 4. Process each item ─────────────────────────────────────
+        # ── 4. Batch-load existing Odoo products ─────────────────────
+        code_map = odoo.find_all_products_with_codes()
+        logger.info("Loaded %d Odoo product codes for matching", len(code_map))
+
+        # ── 5. Process each item ─────────────────────────────────────
         for item in ordered_items:
             guid = item["guid"]
             number = item.get("number", "?")
@@ -206,11 +212,10 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     result["items_processed"].append(item_detail)
                     continue
 
-                arena_code = f"ARENA-{number}"
                 product_vals = map_arena_item_to_odoo_product(item, mapping_config)
 
                 # ── Create or update product in Odoo ─────────────────
-                existing_tmpl_id = odoo.find_product_by_code(arena_code)
+                existing_tmpl_id = code_map.get(number)
 
                 if existing_tmpl_id:
                     update_vals = {k: v for k, v in product_vals.items() if k != "default_code"}
@@ -218,12 +223,13 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     tmpl_id = existing_tmpl_id
                     item_detail["action"] = "updated"
                     result["products_updated"] += 1
-                    logger.info("Updated product %s (template=%d)", arena_code, tmpl_id)
+                    logger.info("Updated product %s (template=%d)", number, tmpl_id)
                 else:
                     tmpl_id = odoo.create_product(product_vals)
+                    code_map[number] = tmpl_id  # Add to map for BOM lookups
                     item_detail["action"] = "created"
                     result["products_created"] += 1
-                    logger.info("Created product %s → template=%d", arena_code, tmpl_id)
+                    logger.info("Created product %s -> template=%d", number, tmpl_id)
 
                 item_detail["odoo_template_id"] = tmpl_id
                 variant_id = odoo.get_product_variant_id(tmpl_id)
@@ -235,17 +241,16 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                     for bom_line in bom_lines:
                         comp_info = bom_line.get("item", {})
                         comp_number = comp_info.get("number", "")
-                        comp_code = f"ARENA-{comp_number}"
                         quantity = bom_line.get("quantity", 1)
 
-                        comp_tmpl_id = odoo.find_product_by_code(comp_code)
+                        comp_tmpl_id = code_map.get(comp_number)
                         if not comp_tmpl_id:
-                            logger.warning("BOM: component %s not in Odoo — skipping line", comp_code)
+                            logger.warning("BOM: component %s not in Odoo -- skipping line", comp_number)
                             continue
 
                         comp_variant_id = odoo.get_product_variant_id(comp_tmpl_id)
                         if not comp_variant_id:
-                            logger.warning("BOM: no variant for %s — skipping line", comp_code)
+                            logger.warning("BOM: no variant for %s -- skipping line", comp_number)
                             continue
 
                         odoo_bom_lines.append(
@@ -257,7 +262,7 @@ def run_sync(arena: ArenaClient, odoo: OdooClient, mapping_config: dict) -> dict
                         item_detail["odoo_bom_id"] = bom_id
                         result["boms_created"] += 1
                         logger.info("Created BOM id=%d for %s (%d/%d lines)",
-                                    bom_id, arena_code, len(odoo_bom_lines), len(bom_lines))
+                                    bom_id, number, len(odoo_bom_lines), len(bom_lines))
                 elif bom_lines:
                     bom_id = odoo.find_bom_by_product(tmpl_id)
                     item_detail["odoo_bom_id"] = bom_id

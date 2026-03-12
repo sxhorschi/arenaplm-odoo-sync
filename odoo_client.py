@@ -44,12 +44,12 @@ class OdooClient:
 
         Searches both product.template and product.product (variant),
         since Odoo 19 stores default_code on the variant level.
-        Tries exact match first, then ilike (prefix) match to handle
+        Tries exact match first, then prefix match (code + '-V%') to handle
         version suffixes like -V001.
         """
         for search_domain in [
             [["default_code", "=", default_code]],
-            [["default_code", "ilike", default_code]],
+            [["default_code", "=like", default_code + "-V%"]],
         ]:
             for model, id_field in [("product.template", None), ("product.product", "product_tmpl_id")]:
                 ids = self.execute(model, "search", [search_domain], {"limit": 1})

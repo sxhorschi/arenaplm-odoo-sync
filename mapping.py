@@ -30,7 +30,7 @@ def map_arena_item_to_odoo_product(item: dict, mapping_config: dict) -> dict:
     # Resolve category
     categ_id = cat_map.get(category_name, default_cat)
     if category_name and category_name not in cat_map:
-        logger.warning("Unmapped Arena category '%s' → using default (id=%d)", category_name, default_cat)
+        logger.warning("Unmapped Arena category '%s' -- using default (id=%d)", category_name, default_cat)
 
     # Resolve UoM
     uom_id = uom_map.get(uom_name, default_uom)

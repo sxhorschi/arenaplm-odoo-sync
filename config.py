@@ -32,7 +32,7 @@ DEFAULT_CONFIG = {
     "mapping": {
         "categories": {},   # Arena category name → Odoo categ_id
         "uom": {},          # Arena UoM name → Odoo uom.uom ID
-        "default_category_id": 1,
+        "default_category_id": 17,  # "Hardware" — override in Settings if different
         "default_uom_id": 1,
     },
 }

@@ -144,7 +144,8 @@ def api_status():
     synced = sum(1 for v in items.values() if v.get("status") == "SYNCED")
     errored = sum(1 for v in items.values() if v.get("status") == "ERROR")
     with_bom = sum(1 for v in items.values() if v.get("odoo_bom_id"))
-    assemblies = sum(1 for v in items.values() if v.get("assembly_type"))
+    assemblies = sum(1 for v in items.values()
+                     if v.get("assembly_type") and v["assembly_type"] != "NOT_AN_ASSEMBLY")
     components = total - assemblies
 
     return jsonify({
@@ -314,7 +315,6 @@ def api_transfer():
 
     def do_transfer():
         transfer_progress["running"] = True
-        transfer_progress["total"] = len(items_to_transfer)
         transfer_progress["done"] = 0
         transfer_progress["current"] = ""
         transfer_progress["results"] = []
@@ -330,7 +330,21 @@ def api_transfer():
 
             from mapping import map_arena_item_to_odoo_product, map_bom_line
 
-            for item in items_to_transfer:
+            # Sort: components (NOT_AN_ASSEMBLY) first, then sub-assemblies, then top-level
+            # This ensures components exist in Odoo before assemblies try to reference them in BOMs
+            type_order = {"NOT_AN_ASSEMBLY": 0, "": 0, "SUB_ASSEMBLY": 1, "TOP_LEVEL_ASSEMBLY": 2}
+            sorted_items = sorted(items_to_transfer,
+                                  key=lambda i: type_order.get(i.get("assembly_type", ""), 0))
+
+            transfer_progress["total"] = len(sorted_items)
+
+            # Build batch lookup map: Arena part number -> Odoo template ID
+            # This is the single source of truth for matching
+            code_map = odoo.find_all_products_with_codes()
+            log_activity("INFO", f"Transfer: loaded {len(code_map)} Odoo product codes for matching")
+
+            # Phase 1: Create all products first
+            for item in sorted_items:
                 number = item.get("number", "?")
                 name = item.get("name", "?")
                 guid = item.get("guid", "")
@@ -339,21 +353,22 @@ def api_transfer():
                          "odoo_template_id": None, "odoo_bom_id": None}
 
                 try:
-                    # Check by raw part number first, then ARENA- prefixed
-                    existing_tmpl = odoo.find_product_by_code(number) or odoo.find_product_by_code(f"ARENA-{number}")
+                    # Use batch map for lookup
+                    existing_tmpl = code_map.get(number)
 
                     if existing_tmpl:
                         entry["status"] = "skipped"
                         entry["odoo_template_id"] = existing_tmpl
                     else:
-                        # Build product vals from the Arena item data we have
                         product_vals = map_arena_item_to_odoo_product(item, mapping_cfg)
                         tmpl_id = odoo.create_product(product_vals)
                         variant_id = odoo.get_product_variant_id(tmpl_id)
                         entry["odoo_template_id"] = tmpl_id
                         entry["status"] = "created"
 
-                        # Update local state
+                        # Add to lookup map so BOM phase can find this product
+                        code_map[number] = tmpl_id
+
                         state["items"][guid] = {
                             "number": number,
                             "name": name,
@@ -369,30 +384,7 @@ def api_transfer():
                             "odoo_bom_id": None,
                             "synced_at": datetime.now().isoformat(),
                         }
-
-                    # Create BOM if assembly with components
-                    bom_components = item.get("bom_components", [])
-                    tmpl_id = entry["odoo_template_id"]
-                    if bom_components and tmpl_id and not odoo.find_bom_by_product(tmpl_id):
-                        odoo_bom_lines = []
-                        for comp in bom_components:
-                            comp_number = comp.get('number', '')
-                            comp_tmpl = odoo.find_product_by_code(comp_number) or odoo.find_product_by_code(f"ARENA-{comp_number}")
-                            if not comp_tmpl:
-                                continue
-                            comp_variant = odoo.get_product_variant_id(comp_tmpl)
-                            if not comp_variant:
-                                continue
-                            odoo_bom_lines.append(map_bom_line(
-                                comp_variant, comp.get("qty", 1), "", mapping_cfg
-                            ))
-                        if odoo_bom_lines:
-                            bom_id = odoo.create_bom(tmpl_id, odoo_bom_lines)
-                            entry["odoo_bom_id"] = bom_id
-                            if guid in state["items"]:
-                                state["items"][guid]["odoo_bom_id"] = bom_id
-
-                    save_state(state)
+                        save_state(state)
 
                 except Exception as e:
                     entry["status"] = "error"
@@ -401,6 +393,91 @@ def api_transfer():
 
                 transfer_progress["results"].append(entry)
                 transfer_progress["done"] += 1
+
+            # Phase 2: Reconcile ALL assembly BOMs
+            # Fetch all Arena assemblies and their BOMs, then for each assembly
+            # that exists in Odoo without a BOM, create it using whatever
+            # components are available. This catches cases where a component
+            # was just transferred and needs to be added to an existing assembly's BOM.
+            transfer_progress["current"] = "Fetching Arena assemblies for BOM reconciliation..."
+            try:
+                arena = build_arena(config)
+                arena.authenticate()
+                all_items = arena.get_items(lifecycle_phase="In Production")
+                assemblies = [i for i in all_items
+                              if i.get("assemblyType") not in (None, "", "NOT_AN_ASSEMBLY")]
+
+                # Refresh code_map to include newly created products
+                code_map = odoo.find_all_products_with_codes()
+
+                boms_created = 0
+                for asm in assemblies:
+                    asm_number = asm.get("number", "")
+                    asm_tmpl = code_map.get(asm_number)
+                    if not asm_tmpl:
+                        continue  # Assembly not in Odoo yet
+
+                    # Skip if BOM already exists
+                    if odoo.find_bom_by_product(asm_tmpl):
+                        continue
+
+                    # Fetch BOM lines from Arena
+                    bom_lines = arena.get_bom_for_item(asm["guid"])
+                    if not bom_lines:
+                        continue
+
+                    odoo_bom_lines = []
+                    skipped_comps = []
+                    for line in bom_lines:
+                        comp_item = line.get("item") or {}
+                        comp_number = comp_item.get("number", "")
+                        comp_tmpl = code_map.get(comp_number)
+                        if not comp_tmpl:
+                            skipped_comps.append(comp_number)
+                            continue
+                        comp_variant = odoo.get_product_variant_id(comp_tmpl)
+                        if not comp_variant:
+                            skipped_comps.append(f"{comp_number} (no variant)")
+                            continue
+                        odoo_bom_lines.append(map_bom_line(
+                            comp_variant, line.get("quantity", 1), "", mapping_cfg
+                        ))
+
+                    if skipped_comps:
+                        logger.warning("BOM %s: %d components not in Odoo: %s",
+                                       asm_number, len(skipped_comps), ", ".join(skipped_comps))
+
+                    if odoo_bom_lines:
+                        transfer_progress["current"] = f"BOM: {asm_number} ({len(odoo_bom_lines)} lines)"
+                        try:
+                            bom_id = odoo.create_bom(asm_tmpl, odoo_bom_lines)
+                            boms_created += 1
+
+                            # Update result entry if this assembly was in the transfer
+                            for r in transfer_progress["results"]:
+                                if r["number"] == asm_number:
+                                    r["odoo_bom_id"] = bom_id
+                                    break
+
+                            # Update state
+                            for guid, sdata in state.get("items", {}).items():
+                                if sdata.get("number") == asm_number:
+                                    sdata["odoo_bom_id"] = bom_id
+                                    save_state(state)
+                                    break
+
+                        except Exception as e:
+                            logger.error("BOM creation failed for %s: %s", asm_number, e, exc_info=True)
+                            for r in transfer_progress["results"]:
+                                if r["number"] == asm_number:
+                                    r["error"] = (r.get("error") or "") + f" BOM error: {e}"
+                                    break
+
+                log_activity("INFO", f"BOM reconciliation: created {boms_created} new BOMs")
+
+            except Exception as e:
+                logger.error("BOM reconciliation failed: %s", e, exc_info=True)
+                log_activity("WARN", f"BOM reconciliation error: {e}")
 
             created = sum(1 for r in transfer_progress["results"] if r["status"] == "created")
             skipped = sum(1 for r in transfer_progress["results"] if r["status"] == "skipped")
@@ -755,6 +832,6 @@ def api_scheduler():
 if __name__ == "__main__":
     import os
     port = int(os.getenv("PORT", "5000"))
-    print(f"\n  Arena → Odoo Sync Dashboard")
+    print(f"\n  Arena -> Odoo Sync Dashboard")
     print(f"  http://localhost:{port}\n")
     app.run(host="0.0.0.0", port=port, debug=True)

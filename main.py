@@ -13,7 +13,7 @@ import argparse
 import os
 
 def main():
-    parser = argparse.ArgumentParser(description="Arena → Odoo Sync Dashboard")
+    parser = argparse.ArgumentParser(description="Arena -> Odoo Sync Dashboard")
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "5000")))
     args = parser.parse_args()
 
