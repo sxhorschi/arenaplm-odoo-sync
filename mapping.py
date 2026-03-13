@@ -145,6 +145,8 @@ def map_arena_item_to_odoo_product(item: dict, mapping_config: dict) -> dict:
         "uom_id": uom_id,
         "sale_ok": False,
         "purchase_ok": True,
+        "list_price": 0.0,
+        "standard_price": 0.0,
         "description": "\n".join(desc_lines),
     }
 
@@ -159,10 +161,14 @@ def map_bom_line(component_variant_id: int, quantity: float, uom_name: str, mapp
         mapping_config: config["mapping"]
     """
     uom_map = mapping_config.get("uom", {})
-    default_uom = mapping_config.get("default_uom_id", 1)
+    cfg_uom = mapping_config.get("default_uom_id", 1)
+    default_uom = _safe_default_uom_id or cfg_uom
+
+    # Same priority chain as product mapping: manual override → auto-match → default
+    uom_id = uom_map.get(uom_name) or _auto_uom_map.get(uom_name) or default_uom
 
     return {
         "product_id": component_variant_id,
         "product_qty": quantity,
-        "product_uom_id": uom_map.get(uom_name, default_uom),
+        "product_uom_id": uom_id,
     }

@@ -82,12 +82,15 @@ class OdooClient:
         Also adds entries with version suffixes stripped (e.g. E-BAT-00003-V001 → E-BAT-00003)
         so Arena part numbers can match Odoo codes that have -V### suffixes.
 
-        Searches both product.template and product.product for Odoo 19 compat.
+        Searches both product.template and product.product for max compat.
         """
         import re
         result = {}
 
         def add_code(code: str, tmpl_id: int):
+            if not code:
+                return
+            code = code.strip()
             if not code:
                 return
             result[code] = tmpl_id
@@ -97,23 +100,28 @@ class OdooClient:
                 result[stripped] = tmpl_id
 
         # Search templates with a default_code
-        tmpl_ids = self.execute("product.template", "search", [[["default_code", "!=", False]]])
+        tmpl_ids = self.execute("product.template", "search", [
+            [["default_code", "!=", False], ["default_code", "!=", ""]]
+        ])
         if tmpl_ids:
             records = self.execute("product.template", "read", [tmpl_ids, ["id", "default_code"]])
             for r in records:
                 add_code(r.get("default_code", ""), r["id"])
 
-        # Search variants (Odoo 19 stores default_code on product.product)
-        var_ids = self.execute("product.product", "search", [[["default_code", "!=", False]]])
+        # Search variants (Odoo 17+ stores default_code on product.product)
+        var_ids = self.execute("product.product", "search", [
+            [["default_code", "!=", False], ["default_code", "!=", ""]]
+        ])
         if var_ids:
             records = self.execute("product.product", "read", [var_ids, ["default_code", "product_tmpl_id"]])
             for r in records:
-                code = r.get("default_code", "")
+                code = (r.get("default_code", "") or "").strip()
                 if code and code not in result:
                     tmpl = r.get("product_tmpl_id")
                     tmpl_id = tmpl[0] if isinstance(tmpl, (list, tuple)) else tmpl
                     add_code(code, tmpl_id)
 
+        logger.info("Found %d Odoo products with codes", len(result))
         return result
 
     # ── BOMs ─────────────────────────────────────────────────────────
