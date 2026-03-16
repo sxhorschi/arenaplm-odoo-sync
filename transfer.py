@@ -234,7 +234,7 @@ def ensure_product_in_odoo(
     if existing_tmpl:
         # Check for lifecycle transition — update name if needed
         product_vals = map_arena_item_to_odoo_product(item, mapping_config)
-        update_vals = {k: v for k, v in product_vals.items() if k not in ("default_code", "list_price", "standard_price")}
+        update_vals = {k: v for k, v in product_vals.items() if k not in ("list_price", "standard_price")}
         odoo.update_product(existing_tmpl, update_vals)
         variant_id = odoo.get_product_variant_id(existing_tmpl)
         return existing_tmpl, variant_id, "updated"

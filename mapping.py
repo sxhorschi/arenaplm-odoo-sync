@@ -130,15 +130,15 @@ def map_arena_item_to_odoo_product(item: dict, mapping_config: dict) -> dict:
     if item.get("description"):
         desc_lines.append(item["description"])
     desc_lines.append(f"Arena Part Number: {number}")
-    if item.get("revisionNumber"):
-        desc_lines.append(f"Arena Revision: {item['revisionNumber']}")
+    revision = item.get("revisionNumber") or item.get("revision", "")
+    if revision:
+        desc_lines.append(f"Arena Revision: {revision}")
     if category_name:
         desc_lines.append(f"Arena Category: {category_name}")
-    if item.get("assemblyType"):
-        desc_lines.append(f"Type: {item['assemblyType']}")
+    if item.get("assemblyType") or item.get("assembly_type"):
+        desc_lines.append(f"Type: {item.get('assemblyType') or item.get('assembly_type')}")
 
     # Build default_code with revision suffix: E-BAT-00003-V001
-    revision = item.get("revisionNumber", "")
     if revision:
         default_code = f"{number}-V{str(revision).zfill(3)}"
     else:
