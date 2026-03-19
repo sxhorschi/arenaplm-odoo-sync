@@ -1,0 +1,13 @@
+services:
+  arena-odoo-sync:
+    build: .
+    container_name: arena-odoo-sync
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:${PORT:-5000}"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PRODUCTION=1

@@ -1,0 +1,34 @@
+# Secrets & runtime state
+config.json
+sync_state.json
+.env
+
+# Logs
+sync.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Scripts (not needed in container)
+setup.sh
+setup.bat
+verify_matching.py
+
+# Docs
+CLAUDE.md

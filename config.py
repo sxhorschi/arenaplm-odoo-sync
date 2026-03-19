@@ -1,16 +1,22 @@
 """Configuration management.
 
-Stores all settings (API credentials, mappings, sync preferences) in a local
-JSON file. No .env needed — everything is configured through the dashboard.
+Stores settings in config.json with optional .env / environment variable
+overrides for sensitive values (credentials, secrets).
 """
 
 import json
 import logging
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = Path(__file__).parent / "config.json"
+DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent))
+CONFIG_FILE = DATA_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     "arena": {
@@ -43,12 +49,29 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE) as f:
                 saved = json.load(f)
-            # Merge with defaults so new keys are always present
             config = _deep_merge(DEFAULT_CONFIG, saved)
-            return config
         except Exception as e:
             logger.error("Failed to load config: %s", e)
-    return json.loads(json.dumps(DEFAULT_CONFIG))
+            config = json.loads(json.dumps(DEFAULT_CONFIG))
+    else:
+        config = json.loads(json.dumps(DEFAULT_CONFIG))
+
+    # Environment variables override config.json (useful for deployment)
+    _env_overrides = {
+        ("arena", "email"):        "ARENA_EMAIL",
+        ("arena", "password"):     "ARENA_PASSWORD",
+        ("arena", "workspace_id"): "ARENA_WORKSPACE_ID",
+        ("odoo", "url"):           "ODOO_URL",
+        ("odoo", "db"):            "ODOO_DB",
+        ("odoo", "user"):          "ODOO_USER",
+        ("odoo", "password"):      "ODOO_PASSWORD",
+    }
+    for (section, key), env_var in _env_overrides.items():
+        val = os.getenv(env_var)
+        if val:
+            config[section][key] = val
+
+    return config
 
 
 def save_config(config: dict) -> None:

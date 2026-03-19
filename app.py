@@ -5,10 +5,15 @@ Thin Flask route handlers. All transfer/sync logic lives in transfer.py.
 
 import json
 import logging
+import os
+import secrets
 import threading
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
+from flask_login import login_required
 
 from arena_client import ArenaClient
 from odoo_client import OdooClient
@@ -18,19 +23,75 @@ from transfer import (
     progress as transfer_progress, is_engine_busy,
 )
 from sync import start_scheduler, stop_scheduler, is_scheduler_active
+from auth import auth_bp, login_manager
+
+# ── Logging ─────────────────────────────────────────────────────────
+
+_data_dir = Path(os.getenv("DATA_DIR", Path(__file__).parent))
+_log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+_production = os.getenv("PRODUCTION", "0") == "1"
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=_log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("sync.log", encoding="utf-8"),
+        RotatingFileHandler(
+            str(_data_dir / "sync.log"), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        ),
     ],
 )
 logger = logging.getLogger(__name__)
 
+# ── Flask app ───────────────────────────────────────────────────────
+
 app = Flask(__name__)
+if _production and not os.getenv("SECRET_KEY"):
+    raise RuntimeError("SECRET_KEY must be set in production. Generate one: python -c \"import secrets; print(secrets.token_hex(32))\"")
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+
+# Session cookie security
+if _production:
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["REMEMBER_COOKIE_SECURE"] = True
+    app.config["REMEMBER_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+
+# Auth
+login_manager.init_app(app)
+app.register_blueprint(auth_bp)
+
+
+# ── CSRF protection for API endpoints ─────────────────────────────
+
+@app.before_request
+def csrf_protect():
+    """Block cross-site requests to state-changing API endpoints.
+
+    Requires X-Requested-With header on POST/PUT/DELETE to /api/* routes.
+    HTML forms cannot set custom headers, so this prevents CSRF attacks.
+    """
+    if (
+        request.path.startswith("/api/")
+        and request.method in ("POST", "PUT", "DELETE")
+        and not request.headers.get("X-Requested-With")
+    ):
+        return jsonify({"error": "Missing X-Requested-With header"}), 403
+
+
+# ── Security headers ────────────────────────────────────────────────
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if _production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 # ── In-memory activity log ───────────────────────────────────────────
 
@@ -93,6 +154,7 @@ def _mapping_config():
 # ── Routes: Pages ────────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def page_dashboard():
     return render_template("dashboard.html")
 
@@ -100,6 +162,7 @@ def page_dashboard():
 # ── Routes: Status & Data ────────────────────────────────────────────
 
 @app.route("/api/status")
+@login_required
 def api_status():
     config = load_config()
     state = load_state()
@@ -138,6 +201,7 @@ def api_status():
 
 
 @app.route("/api/items")
+@login_required
 def api_items():
     state = load_state()
     all_items = state.get("items", {})
@@ -211,6 +275,7 @@ def api_items():
 
 
 @app.route("/api/activity")
+@login_required
 def api_activity():
     with _log_lock:
         return jsonify(activity_log[:200])
@@ -219,6 +284,7 @@ def api_activity():
 # ── Routes: Fetch Arena ──────────────────────────────────────────────
 
 @app.route("/api/fetch-arena", methods=["POST"])
+@login_required
 def api_fetch_arena():
     """Fetch items from Arena and cross-check against Odoo."""
     try:
@@ -331,12 +397,14 @@ def api_fetch_arena():
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Fetch arena failed")
+        return jsonify({"error": "Failed to fetch items from Arena"}), 500
 
 
 # ── Routes: Transfer ─────────────────────────────────────────────────
 
 @app.route("/api/transfer", methods=["POST"])
+@login_required
 def api_transfer():
     """Transfer selected items to Odoo."""
     if transfer_progress.running or is_engine_busy():
@@ -358,13 +426,15 @@ def api_transfer():
         arena = build_arena(config)
         arena.authenticate()
     except Exception as e:
-        return jsonify({"error": f"Arena login failed: {e}"}), 400
+        logger.error("Arena login failed: %s", e, exc_info=True)
+        return jsonify({"error": "Arena login failed. Check credentials and try again."}), 400
 
     try:
         odoo = build_odoo(config)
         odoo.authenticate()
     except Exception as e:
-        return jsonify({"error": f"Odoo login failed: {e}"}), 400
+        logger.error("Odoo login failed: %s", e, exc_info=True)
+        return jsonify({"error": "Odoo login failed. Check credentials and try again."}), 400
 
     def do_transfer():
         try:
@@ -391,6 +461,7 @@ def api_transfer():
 
 
 @app.route("/api/transfer/progress")
+@login_required
 def api_transfer_progress():
     return jsonify(transfer_progress.to_dict())
 
@@ -398,6 +469,7 @@ def api_transfer_progress():
 # ── Routes: Sync ─────────────────────────────────────────────────────
 
 @app.route("/api/sync", methods=["POST"])
+@login_required
 def api_sync():
     """Trigger a full sync (fetch all from Arena + transfer to Odoo)."""
     if sync_runtime["running"] or is_engine_busy():
@@ -440,6 +512,7 @@ def api_sync():
 # ── Routes: State management ─────────────────────────────────────────
 
 @app.route("/api/reset-item", methods=["POST"])
+@login_required
 def api_reset_item():
     guid = request.json.get("guid")
     if not guid:
@@ -453,6 +526,7 @@ def api_reset_item():
 
 
 @app.route("/api/reset-errors", methods=["POST"])
+@login_required
 def api_reset_errors():
     state = load_state()
     count = 0
@@ -468,6 +542,7 @@ def api_reset_errors():
 # ── Routes: Connection Tests ─────────────────────────────────────────
 
 @app.route("/api/test/arena", methods=["POST"])
+@login_required
 def api_test_arena():
     try:
         config = load_config()
@@ -476,10 +551,12 @@ def api_test_arena():
         items = client.get_items(lifecycle_phase="In Production")
         return jsonify({"ok": True, "message": f"Connected. {len(items)} items in production."})
     except Exception as e:
-        return jsonify({"ok": False, "message": str(e)}), 400
+        logger.error("Arena test failed: %s", e, exc_info=True)
+        return jsonify({"ok": False, "message": "Connection failed. Check Arena credentials."}), 400
 
 
 @app.route("/api/test/odoo", methods=["POST"])
+@login_required
 def api_test_odoo():
     try:
         config = load_config()
@@ -488,12 +565,14 @@ def api_test_odoo():
         version = client.get_server_version()
         return jsonify({"ok": True, "message": f"Connected to Odoo {version} (uid={uid})"})
     except Exception as e:
-        return jsonify({"ok": False, "message": str(e)}), 400
+        logger.error("Odoo test failed: %s", e, exc_info=True)
+        return jsonify({"ok": False, "message": "Connection failed. Check Odoo credentials and URL."}), 400
 
 
 # ── Routes: Configuration ────────────────────────────────────────────
 
 @app.route("/api/config", methods=["GET"])
+@login_required
 def api_get_config():
     config = load_config()
     safe = json.loads(json.dumps(config))
@@ -507,6 +586,7 @@ def api_get_config():
 
 
 @app.route("/api/config", methods=["PUT"])
+@login_required
 def api_save_config():
     incoming = request.json
     config = load_config()
@@ -537,6 +617,7 @@ def api_save_config():
 
 
 @app.route("/api/odoo/categories")
+@login_required
 def api_odoo_categories():
     try:
         config = load_config()
@@ -544,10 +625,12 @@ def api_odoo_categories():
         client.authenticate()
         return jsonify(client.get_product_categories())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Failed to fetch Odoo categories")
+        return jsonify({"error": "Failed to fetch Odoo categories"}), 500
 
 
 @app.route("/api/odoo/uoms")
+@login_required
 def api_odoo_uoms():
     try:
         config = load_config()
@@ -555,10 +638,12 @@ def api_odoo_uoms():
         client.authenticate()
         return jsonify(client.get_uom_list())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Failed to fetch Odoo UoMs")
+        return jsonify({"error": "Failed to fetch Odoo UoMs"}), 500
 
 
 @app.route("/api/category-preview")
+@login_required
 def api_category_preview():
     try:
         config = load_config()
@@ -607,12 +692,14 @@ def api_category_preview():
 
         return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Category preview failed")
+        return jsonify({"error": "Failed to generate category preview"}), 500
 
 
 # ── Routes: Scheduler ────────────────────────────────────────────────
 
 @app.route("/api/scheduler", methods=["POST"])
+@login_required
 def api_scheduler():
     action = request.json.get("action")
 
@@ -636,11 +723,8 @@ def api_scheduler():
     return jsonify({"error": "Invalid action"}), 400
 
 
-# ── Main ─────────────────────────────────────────────────────────────
+# ── Main (use main.py instead) ───────────────────────────────────────
 
 if __name__ == "__main__":
-    import os
-    port = int(os.getenv("PORT", "5000"))
-    print(f"\n  Arena -> Odoo Sync Dashboard")
-    print(f"  http://localhost:{port}\n")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    print("Use 'python main.py' to start the server.")
+    raise SystemExit(1)

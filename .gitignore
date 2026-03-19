@@ -14,9 +14,13 @@ env/
 
 # Temporary/debug
 verify_matching.py
+cookies.txt
 
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# PID files
+*.pid

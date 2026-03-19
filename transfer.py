@@ -13,6 +13,7 @@ Key invariants:
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,8 @@ from mapping import map_arena_item_to_odoo_product, map_bom_line, build_auto_map
 
 logger = logging.getLogger(__name__)
 
-STATE_FILE = Path(__file__).parent / "sync_state.json"
+_DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent))
+STATE_FILE = _DATA_DIR / "sync_state.json"
 _state_lock = threading.Lock()
 _engine_lock = threading.Lock()  # prevents concurrent transfer + sync
 

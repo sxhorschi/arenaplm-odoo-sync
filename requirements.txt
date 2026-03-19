@@ -1,3 +1,6 @@
 requests>=2.31.0
 schedule>=1.2.0
 flask>=3.0.0
+flask-login>=0.6.3
+python-dotenv>=1.0.0
+waitress>=3.0.0

@@ -155,6 +155,7 @@ def map_arena_item_to_odoo_product(item: dict, mapping_config: dict) -> dict:
         "list_price": 0.0,
         "standard_price": 0.0,
         "description": "\n".join(desc_lines),
+        "description_purchase": item.get("description", ""),
     }
 
 
